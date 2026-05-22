@@ -1,0 +1,657 @@
+import "./styles.css";
+import { createMeetingPoint, createPerson, createSuggestion, loadState, saveState } from "./store";
+import { createMapView } from "./ui/mapView";
+import { renderMeetingPoints } from "./ui/meetingPoints";
+import { renderPersonList } from "./ui/personList";
+import { renderRouteResult } from "./ui/routeResult";
+import { createAddressInput } from "./ui/addressInput";
+import type { AppState, RoutePlanResponse, Suggestion } from "./types";
+
+let state = loadState();
+type ChatMessage = { role: "assistant" | "user"; content: string; source?: "model" | "fallback" };
+type ManifestPatch = {
+  city?: string;
+  destination?: { name: string; address: string; lng: number; lat: number } | string | null;
+  people?: Array<{
+    id?: string;
+    name: string;
+    address?: string;
+    lng?: number;
+    lat?: number;
+    hasCar?: boolean;
+    note?: string;
+    assignedDriverId?: string;
+    assignedDriverName?: string;
+  }>;
+  meetingPoints?: Array<{
+    id?: string;
+    name: string;
+    address?: string;
+    lng?: number;
+    lat?: number;
+    memberIds?: string[];
+    memberNames?: string[];
+    assignedDriverId?: string;
+    assignedDriverName?: string;
+  }>;
+  clearMeetingPoints?: boolean;
+  explanation?: string;
+};
+let chatMessages: ChatMessage[] = [
+  { role: "assistant", content: "生成路线后，可以问我：能不能更快、谁适合坐地铁、9点前集合时某人最晚几点出发，或者直接让我更新左侧清单。" }
+];
+
+const app = document.querySelector<HTMLDivElement>("#app");
+if (!app) throw new Error("App root not found");
+
+app.innerHTML = `
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <span class="brand-mark">接</span>
+        <div>
+          <h1>接人路线规划</h1>
+          <p>多人点位、司机分配、集合路线</p>
+        </div>
+      </div>
+      <div class="topbar-status" aria-label="当前规划状态">
+        <span id="peopleCount">0 人</span>
+        <span id="driverCount">0 车</span>
+        <span id="meetingCount">0 集合点</span>
+      </div>
+      <div class="city-control">
+        <label class="field-label compact" for="cityInput">城市</label>
+        <input id="cityInput" class="text-input city-input" value="${state.city}" />
+      </div>
+    </header>
+    <main class="workspace">
+      <section class="input-panel">
+        <div class="panel-heading">
+          <span>Manifest</span>
+          <h2>行程清单</h2>
+          <p>先确认终点，再把乘客、司机和集合点排进路线。</p>
+        </div>
+        <div id="destinationHost"></div>
+        <div id="personListHost"></div>
+        <div id="meetingPointsHost"></div>
+        <div class="action-row">
+          <button id="planButton" class="primary-button" type="button">常规生成</button>
+          <button id="smartPlanButton" class="secondary-button smart-route-button" type="button">AI生成规划(跳过集合点)</button>
+        </div>
+      </section>
+      <div class="resize-handle resize-left" title="拖动调整输入区宽度"></div>
+      <section class="map-panel">
+        <div class="map-stage">
+          <div id="map"></div>
+          <div class="map-hud" aria-hidden="true">
+            <span>Route Canvas</span>
+            <strong id="mapStatus">等待点位</strong>
+          </div>
+          <div class="map-legend" aria-hidden="true">
+            <span><i class="legend-dot driver"></i>司机</span>
+            <span><i class="legend-dot passenger"></i>乘客</span>
+            <span><i class="legend-dot meeting"></i>集合点</span>
+            <span><i class="legend-dot destination"></i>终点</span>
+          </div>
+        </div>
+      </section>
+      <div class="resize-handle resize-right" title="拖动调整结果区宽度"></div>
+      <aside class="result-panel">
+        <div class="panel-heading result-heading">
+          <span>Decision</span>
+          <h2>路线结果</h2>
+          <p>生成后查看司机路线、集合方式和备选顺序。</p>
+        </div>
+        <div id="resultHost"></div>
+        <section class="chat-panel">
+          <div class="chat-heading">
+            <span>Route Chat</span>
+            <strong>方案对话</strong>
+          </div>
+          <div id="chatMessages" class="chat-messages"></div>
+          <form id="chatForm" class="chat-form">
+            <textarea id="chatInput" class="text-input" rows="2" placeholder="例如：如果9点前全员集合，丙最晚几点出发？"></textarea>
+            <button id="chatSendButton" class="secondary-button" type="submit">发送</button>
+          </form>
+        </section>
+      </aside>
+    </main>
+  </div>
+`;
+
+const destinationHost = document.querySelector<HTMLElement>("#destinationHost")!;
+const personListHost = document.querySelector<HTMLElement>("#personListHost")!;
+const meetingPointsHost = document.querySelector<HTMLElement>("#meetingPointsHost")!;
+const resultHost = document.querySelector<HTMLElement>("#resultHost")!;
+const cityInput = document.querySelector<HTMLInputElement>("#cityInput")!;
+const planButton = document.querySelector<HTMLButtonElement>("#planButton")!;
+const smartPlanButton = document.querySelector<HTMLButtonElement>("#smartPlanButton")!;
+const workspace = document.querySelector<HTMLElement>(".workspace")!;
+const leftResizeHandle = document.querySelector<HTMLElement>(".resize-left")!;
+const rightResizeHandle = document.querySelector<HTMLElement>(".resize-right")!;
+const peopleCount = document.querySelector<HTMLElement>("#peopleCount")!;
+const driverCount = document.querySelector<HTMLElement>("#driverCount")!;
+const meetingCount = document.querySelector<HTMLElement>("#meetingCount")!;
+const mapStatus = document.querySelector<HTMLElement>("#mapStatus")!;
+const chatMessagesHost = document.querySelector<HTMLElement>("#chatMessages")!;
+const chatForm = document.querySelector<HTMLFormElement>("#chatForm")!;
+const chatInput = document.querySelector<HTMLTextAreaElement>("#chatInput")!;
+const chatSendButton = document.querySelector<HTMLButtonElement>("#chatSendButton")!;
+const mapView = createMapView(document.querySelector<HTMLElement>("#map")!);
+
+function applySavedPanelWidths() {
+  const left = localStorage.getItem("pickup-route-left-panel-width");
+  const right = localStorage.getItem("pickup-route-right-panel-width");
+  if (left) workspace.style.setProperty("--left-panel-width", `${Number(left)}px`);
+  if (right) workspace.style.setProperty("--right-panel-width", `${Number(right)}px`);
+}
+
+function startResize(side: "left" | "right", event: PointerEvent) {
+  if (window.matchMedia("(max-width: 1060px)").matches) return;
+  event.preventDefault();
+  const min = 280;
+  const max = 560;
+  const workspaceRect = workspace.getBoundingClientRect();
+  const onMove = (moveEvent: PointerEvent) => {
+    if (side === "left") {
+      const width = Math.max(min, Math.min(max, moveEvent.clientX - workspaceRect.left));
+      workspace.style.setProperty("--left-panel-width", `${width}px`);
+      localStorage.setItem("pickup-route-left-panel-width", String(Math.round(width)));
+    } else {
+      const width = Math.max(min, Math.min(max, workspaceRect.right - moveEvent.clientX));
+      workspace.style.setProperty("--right-panel-width", `${width}px`);
+      localStorage.setItem("pickup-route-right-panel-width", String(Math.round(width)));
+    }
+  };
+  const onUp = () => {
+    document.body.classList.remove("resizing-layout");
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+  };
+  document.body.classList.add("resizing-layout");
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
+}
+
+function persistAndPaint() {
+  saveState(state);
+  updateChrome();
+  mapView.update(state);
+  renderRouteResult(resultHost, state.routeResult, state.error, state.loading);
+  renderChat();
+}
+
+function updateChrome() {
+  const drivers = state.people.filter((person) => person.hasCar).length;
+  const confirmedPeople = state.people.filter((person) => person.selectedAddress).length;
+  const confirmedDestination = state.destination ? 1 : 0;
+  peopleCount.textContent = `${state.people.length} 人`;
+  driverCount.textContent = `${drivers} 车`;
+  meetingCount.textContent = `${state.meetingPoints.length} 集合点`;
+  if (state.loading) {
+    mapStatus.textContent = "正在计算路线";
+  } else if (state.routeResult) {
+    mapStatus.textContent =
+      state.routeResult.source === "smart" ? "AI集合方案已生成" : state.routeResult.mode === "multi-driver" ? "多司机路线已生成" : "推荐路线已生成";
+  } else {
+    mapStatus.textContent = `${confirmedPeople + confirmedDestination}/${state.people.length + 1} 坐标确认`;
+  }
+}
+
+function renderChat() {
+  chatMessagesHost.innerHTML = "";
+  for (const message of chatMessages) {
+    const bubble = document.createElement("div");
+    bubble.className = `chat-message ${message.role}`;
+    const content = document.createElement("p");
+    content.textContent = message.content;
+    bubble.append(content);
+    if (message.source === "fallback") {
+      const source = document.createElement("small");
+      source.textContent = "本地分析";
+      bubble.append(source);
+    }
+    if (message.source === "model") {
+      const source = document.createElement("small");
+      source.textContent = "模型回复";
+      bubble.append(source);
+    }
+    chatMessagesHost.append(bubble);
+  }
+  chatMessagesHost.scrollTop = chatMessagesHost.scrollHeight;
+}
+
+function localId(prefix: string) {
+  return `${prefix}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function suggestionFromPatch(item: { name: string; address?: string; lng?: number; lat?: number }) {
+  if (!Number.isFinite(item.lng) || !Number.isFinite(item.lat)) return null;
+  return createSuggestion(item.name, item.address || item.name, Number(item.lng), Number(item.lat));
+}
+
+function driverIdByName(name?: string) {
+  if (!name) return "";
+  return state.people.find((person) => person.name === name && person.hasCar)?.id || "";
+}
+
+function personIdByName(name?: string) {
+  if (!name) return "";
+  return state.people.find((person) => person.name === name)?.id || "";
+}
+
+function applyManifestPatch(patch: ManifestPatch) {
+  if (patch.city) {
+    state.city = patch.city;
+    cityInput.value = patch.city;
+  }
+
+  if (patch.destination !== undefined) {
+    if (!patch.destination || typeof patch.destination === "string") {
+      state.destination = null;
+      state.destinationInput = "";
+    } else {
+      const suggestion = suggestionFromPatch(patch.destination);
+      state.destination = suggestion;
+      state.destinationInput = suggestion?.name || patch.destination.name;
+    }
+  }
+
+  if (patch.people?.length) {
+    state.people = patch.people.map((item) => {
+      const existing = state.people.find((person) => person.id === item.id) || state.people.find((person) => person.name && person.name === item.name);
+      const suggestion = suggestionFromPatch({ name: item.name, address: item.address, lng: item.lng, lat: item.lat });
+      return createPerson({
+        id: existing?.id || item.id || localId("person"),
+        name: item.name || existing?.name || "",
+        addressInput: item.address || suggestion?.name || existing?.addressInput || "",
+        selectedAddress: suggestion || existing?.selectedAddress || null,
+        hasCar: item.hasCar ?? existing?.hasCar ?? false,
+        note: item.note ?? existing?.note ?? "",
+        assignedDriverId: item.assignedDriverId || driverIdByName(item.assignedDriverName) || existing?.assignedDriverId || ""
+      });
+    });
+  }
+
+  if (patch.clearMeetingPoints) {
+    state.meetingPoints = [];
+  }
+
+  if (patch.meetingPoints) {
+    state.meetingPoints = patch.meetingPoints.map((item) => {
+      const existing = state.meetingPoints.find((meeting) => meeting.id === item.id) || state.meetingPoints.find((meeting) => meeting.name === item.name);
+      const suggestion = suggestionFromPatch({ name: item.name, address: item.address, lng: item.lng, lat: item.lat });
+      const memberIds = item.memberIds || item.memberNames?.map(personIdByName).filter(Boolean) || existing?.memberIds || [];
+      return createMeetingPoint({
+        id: existing?.id || item.id || localId("meeting"),
+        name: item.name || existing?.name || "集合点",
+        addressInput: item.address || suggestion?.name || existing?.addressInput || "",
+        selectedAddress: suggestion || existing?.selectedAddress || null,
+        memberIds,
+        assignedDriverId: item.assignedDriverId || driverIdByName(item.assignedDriverName) || existing?.assignedDriverId || ""
+      });
+    });
+  }
+
+  state.routeResult = null;
+  renderDestination();
+  renderPeople();
+  renderMeetings();
+  persistAndPaint();
+}
+
+function patchState(patch: Partial<AppState>) {
+  state = { ...state, ...patch };
+  persistAndPaint();
+}
+
+function renderDestination() {
+  destinationHost.innerHTML = "";
+  destinationHost.append(
+    createAddressInput({
+      label: "终点地址",
+      placeholder: "输入终点地址或景区/酒店",
+      value: state.destinationInput,
+      selected: state.destination,
+      city: state.city,
+      onInput: (value) => {
+        state.destinationInput = value;
+        state.destination = null;
+        state.routeResult = null;
+        persistAndPaint();
+      },
+      onSelect: (suggestion) => {
+        state.destinationInput = suggestion.name;
+        state.destination = suggestion;
+        state.routeResult = null;
+        persistAndPaint();
+      }
+    })
+  );
+}
+
+function renderPeople() {
+  const drivers = state.people.filter((person) => person.hasCar);
+  const groupedPersonIds = new Set(state.meetingPoints.flatMap((meeting) => meeting.memberIds));
+  renderPersonList(personListHost, {
+    people: state.people,
+    city: state.city,
+    drivers,
+    groupedPersonIds,
+    onChange: persistAndPaint,
+    onAdd: () => {
+      if (state.people.length >= 8) return;
+      state.people = [...state.people, createPerson()];
+      state.routeResult = null;
+      renderPeople();
+      persistAndPaint();
+    },
+    onRemove: (id) => {
+      state.people = state.people.filter((person) => person.id !== id);
+      state.routeResult = null;
+      renderPeople();
+      persistAndPaint();
+    },
+    onPersonPatch: (id, patch) => {
+      state.people = state.people.map((person) => (person.id === id ? { ...person, ...patch } : person));
+      if (patch.hasCar !== undefined) {
+        state.meetingPoints = state.meetingPoints.map((meeting) => ({
+          ...meeting,
+          memberIds: meeting.memberIds.filter((memberId) => memberId !== id)
+        }));
+        renderPeople();
+      }
+      state.routeResult = null;
+      renderMeetings();
+      persistAndPaint();
+    },
+    onAddressSelect: (id, suggestion: Suggestion) => {
+      state.people = state.people.map((person) =>
+        person.id === id ? { ...person, addressInput: suggestion.name, selectedAddress: suggestion } : person
+      );
+      state.routeResult = null;
+      renderPeople();
+      persistAndPaint();
+    }
+  });
+}
+
+function renderMeetings() {
+  const drivers = state.people.filter((person) => person.hasCar);
+  renderMeetingPoints(meetingPointsHost, {
+    meetingPoints: state.meetingPoints,
+    people: state.people,
+    drivers,
+    city: state.city,
+    onCreate: () => {
+      state.meetingPoints = [...state.meetingPoints, createMeetingPoint({ name: `集合点 ${state.meetingPoints.length + 1}` })];
+      state.routeResult = null;
+      renderMeetings();
+      renderPeople();
+      persistAndPaint();
+    },
+    onRemove: (id) => {
+      state.meetingPoints = state.meetingPoints.filter((meeting) => meeting.id !== id);
+      state.routeResult = null;
+      renderMeetings();
+      renderPeople();
+      persistAndPaint();
+    },
+    onPatch: (id, patch) => {
+      state.meetingPoints = state.meetingPoints.map((meeting) => (meeting.id === id ? { ...meeting, ...patch } : meeting));
+      state.routeResult = null;
+      saveState(state);
+      mapView.update(state);
+    },
+    onAddressSelect: (id, suggestion) => {
+      state.meetingPoints = state.meetingPoints.map((meeting) =>
+        meeting.id === id ? { ...meeting, addressInput: suggestion.name, selectedAddress: suggestion } : meeting
+      );
+      state.routeResult = null;
+      persistAndPaint();
+    },
+    onDropPerson: (meetingId, personId) => {
+      const person = state.people.find((candidate) => candidate.id === personId);
+      if (!person || person.hasCar) {
+        patchState({ error: "司机不能拖入集合点；请只拖需要被接的人。" });
+        return;
+      }
+      state.meetingPoints = state.meetingPoints.map((meeting) => ({
+        ...meeting,
+        memberIds:
+          meeting.id === meetingId
+            ? Array.from(new Set([...meeting.memberIds, personId]))
+            : meeting.memberIds.filter((id) => id !== personId)
+      }));
+      state.routeResult = null;
+      state.error = null;
+      renderMeetings();
+      renderPeople();
+      persistAndPaint();
+    },
+    onRemoveMember: (meetingId, personId) => {
+      state.meetingPoints = state.meetingPoints.map((meeting) =>
+        meeting.id === meetingId ? { ...meeting, memberIds: meeting.memberIds.filter((id) => id !== personId) } : meeting
+      );
+      state.routeResult = null;
+      renderMeetings();
+      renderPeople();
+      persistAndPaint();
+    }
+  });
+}
+
+function validateInput(mode: "manual" | "smart" = "manual") {
+  if (!state.destination) return "请先从候选中确认终点坐标";
+  const readyPeople = state.people.filter((person) => person.name && person.selectedAddress);
+  if (readyPeople.length !== state.people.length) return "请为每个人填写姓名并确认地址坐标";
+  if (mode === "manual") {
+    const readyMeetings = state.meetingPoints.filter((meeting) => meeting.selectedAddress && meeting.memberIds.length);
+    if (readyMeetings.length !== state.meetingPoints.length) return "请为每个集合点确认地址，并至少拖入 1 位乘客";
+  }
+  if (!state.people.some((person) => person.hasCar)) return "请至少勾选 1 位开车人员";
+  return null;
+}
+
+function buildRoutePayload() {
+  return {
+    people: state.people.map((person) => ({
+      id: person.id,
+      name: person.name,
+      address: person.selectedAddress?.address || person.addressInput,
+      location: {
+        lng: person.selectedAddress!.lng,
+        lat: person.selectedAddress!.lat
+      },
+      hasCar: person.hasCar,
+      note: person.note,
+      assignedDriverId: person.assignedDriverId || undefined
+    })),
+    city: state.city,
+    destination: {
+      name: state.destination!.name,
+      address: state.destination!.address || state.destinationInput,
+      location: {
+        lng: state.destination!.lng,
+        lat: state.destination!.lat
+      }
+    },
+    meetingPoints: state.meetingPoints.map((meeting) => ({
+      id: meeting.id,
+      name: meeting.name,
+      address: meeting.selectedAddress?.address || meeting.addressInput,
+      location: {
+        lng: meeting.selectedAddress!.lng,
+        lat: meeting.selectedAddress!.lat
+      },
+      memberIds: meeting.memberIds,
+      assignedDriverId: meeting.assignedDriverId || undefined
+    }))
+  };
+}
+
+async function planRoute(mode: "manual" | "smart") {
+  const validationError = validateInput(mode);
+  if (validationError) {
+    patchState({ error: validationError, routeResult: null });
+    return;
+  }
+
+  patchState({ loading: true, error: null, routeResult: null });
+  planButton.disabled = true;
+  smartPlanButton.disabled = true;
+
+  try {
+    const response = await fetch(mode === "smart" ? "/api/route/smart-plan" : "/api/route/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildRoutePayload())
+    });
+    const data = (await response.json()) as RoutePlanResponse | { error?: string };
+    if (!response.ok) throw new Error("error" in data ? data.error || "路线规划失败" : "路线规划失败");
+    patchState({ loading: false, routeResult: data as RoutePlanResponse, error: null });
+  } catch (error) {
+    patchState({
+      loading: false,
+      routeResult: null,
+      error: error instanceof Error ? error.message : "路线规划失败"
+    });
+  } finally {
+    planButton.disabled = false;
+    smartPlanButton.disabled = false;
+  }
+}
+
+function parseSseChunk(buffer: string, onEvent: (event: string, data: any) => void) {
+  const parts = buffer.split("\n\n");
+  const rest = parts.pop() || "";
+  for (const part of parts) {
+    const lines = part.split(/\r?\n/);
+    const eventLine = lines.find((line) => line.startsWith("event:"));
+    const dataLine = lines.find((line) => line.startsWith("data:"));
+    if (!dataLine) continue;
+    const event = eventLine?.slice(6).trim() || "message";
+    const raw = dataLine.slice(5).trim();
+    try {
+      onEvent(event, JSON.parse(raw));
+    } catch {
+      onEvent(event, raw);
+    }
+  }
+  return rest;
+}
+
+async function sendChatMessage(message: string) {
+  chatMessages = [...chatMessages, { role: "user", content: message }];
+  const assistantMessage: ChatMessage = { role: "assistant", content: "", source: "model" };
+  chatMessages = [...chatMessages, assistantMessage];
+  renderChat();
+  chatInput.value = "";
+  chatSendButton.disabled = true;
+  planButton.disabled = true;
+  smartPlanButton.disabled = true;
+  try {
+    const response = await fetch("/api/route/chat-stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message,
+        appState: state,
+        routeResult: state.routeResult,
+        history: chatMessages
+          .filter((item) => item.content.trim())
+          .slice(-10)
+          .map((item) => ({ role: item.role, content: item.content }))
+      })
+    });
+    if (!response.ok || !response.body) {
+      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(data?.error || "对话失败");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const handleEvent = (event: string, data: any) => {
+      if (event === "token") {
+        assistantMessage.content += data.content || "";
+        renderChat();
+      }
+      if (event === "tool") {
+        assistantMessage.content += assistantMessage.content ? `\n${data.label || "正在调用工具"}` : data.label || "正在调用工具";
+        renderChat();
+      }
+      if (event === "manifest_patch") {
+        applyManifestPatch(data.patch || {});
+        assistantMessage.content += `\n已按对话更新左侧行程清单。`;
+        renderChat();
+      }
+      if (event === "route_result") {
+        state.routeResult = data.routeResult as RoutePlanResponse;
+        state.loading = false;
+        state.error = null;
+        persistAndPaint();
+      }
+      if (event === "done") {
+        assistantMessage.source = data.source || "model";
+        renderChat();
+      }
+      if (event === "error") {
+        assistantMessage.content += `\n${data.error || "对话失败"}`;
+        assistantMessage.source = "fallback";
+        renderChat();
+      }
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      buffer = parseSseChunk(buffer, handleEvent);
+    }
+    if (!assistantMessage.content.trim()) {
+      assistantMessage.content = "没有收到可用回复。";
+      assistantMessage.source = "fallback";
+      renderChat();
+    }
+  } catch (error) {
+    assistantMessage.content = error instanceof Error ? error.message : "对话失败";
+    assistantMessage.source = "fallback";
+  } finally {
+    chatSendButton.disabled = false;
+    planButton.disabled = false;
+    smartPlanButton.disabled = false;
+    renderChat();
+  }
+}
+
+function requestSmartAiPlan() {
+  const validationError = validateInput("smart");
+  if (validationError) {
+    patchState({ error: validationError, routeResult: null });
+    return;
+  }
+  sendChatMessage("请根据当前行程清单，AI生成规划，跳过手动集合点，使用高德API自动寻找最快集合路线。");
+}
+
+cityInput.addEventListener("input", () => {
+  state.city = cityInput.value.trim() || "深圳";
+  saveState(state);
+});
+
+applySavedPanelWidths();
+leftResizeHandle.addEventListener("pointerdown", (event) => startResize("left", event));
+rightResizeHandle.addEventListener("pointerdown", (event) => startResize("right", event));
+planButton.addEventListener("click", () => planRoute("manual"));
+smartPlanButton.addEventListener("click", requestSmartAiPlan);
+chatForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const message = chatInput.value.trim();
+  if (!message) return;
+  sendChatMessage(message);
+});
+
+renderDestination();
+renderPeople();
+renderMeetings();
+persistAndPaint();

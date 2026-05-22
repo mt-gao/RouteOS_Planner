@@ -1,0 +1,26 @@
+{
+  "name": "pickup-route-planner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c cyan,green \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:client": "vite --host 127.0.0.1 --port 5173",
+    "dev:server": "tsx watch server/index.ts",
+    "build": "tsc --noEmit && vite build",
+    "start": "node dist/server/index.js"
+  },
+  "dependencies": {
+    "concurrently": "^9.1.2",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "vite": "^6.0.7",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
