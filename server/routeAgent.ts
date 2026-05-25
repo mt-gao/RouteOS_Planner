@@ -362,6 +362,7 @@ function buildSystemPrompt() {
     "- Smart plans may include planKind, executionTimeline, memberPlans and planWarnings.",
     "- Route results may include shareText and timePlan for copying a concise WeChat-ready route notice.",
     "- If the user states a concrete departure or arrival time, update_manifest with timeConstraint so the UI and copied summary use absolute clock times.",
+    "- If the user says to delay/advance by a relative offset (e.g. 推迟/提前/延后 X 小时/分钟), calculate the new absolute time from the current timeConstraint in the manifest and update_manifest with the result.",
     "- For deadline questions, use memberPlans and executionTimeline. Do not recalculate a timeline in prose.",
     "- Keep chat answers short. Full tables belong to the UI result panel, not the chat bubble."
   ].join("\n\n");
