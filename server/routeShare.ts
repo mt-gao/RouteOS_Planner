@@ -161,10 +161,16 @@ function buildMembersFromMemberPlans(result: RouteResultLike, formatter: ReturnT
     const route = routes.find((item) => item.driverId === plan.assignedDriverId) || routeByStop(routes, plan.pickupPointId) || result.best;
     const departureLabel =
       plan.suggestedMode === "wait_at_origin" ? formatter.label(plan.boardOffsetSec) : formatter.label(plan.latestDepartureOffsetSec);
+    const locationText =
+      plan.suggestedMode === "wait_at_origin"
+        ? plan.pickupPointAddress || `${plan.personName}的出发点`
+        : plan.pickupPointAddress
+          ? `${plan.pickupPointName}（${plan.pickupPointAddress}）`
+          : plan.pickupPointName;
     const actionLabel =
       plan.suggestedMode === "wait_at_origin"
-        ? `${departureLabel} 在出发点等 ${plan.assignedDriverName} 接`
-        : `${departureLabel} 出发，去 ${plan.pickupPointName} 集合`;
+        ? `${departureLabel} 在 ${locationText} 等 ${plan.assignedDriverName} 接`
+        : `${departureLabel} 出发，去 ${locationText} 集合`;
     return {
       personId: plan.personId,
       personName: plan.personName,
@@ -207,6 +213,7 @@ function buildMembersFromManualResult(
           const latestDeparture = (stopOffset || 0) - (memberRoute?.durationSec || 0);
           const departureLabel = formatter.label(latestDeparture);
           const pickupLabel = formatter.label(stopOffset || 0);
+          const meetingLocation = meeting.address ? `${meeting.name}（${meeting.address}）` : meeting.name;
           members.push({
             personId: person.id,
             personName: person.name,
@@ -216,7 +223,7 @@ function buildMembersFromManualResult(
             departureLabel,
             pickupLabel,
             destinationArrivalLabel: formatter.label(route.totalDurationSec),
-            actionLabel: `${departureLabel} 出发，去 ${meeting.name} 集合，${pickupLabel} 上车`,
+            actionLabel: `${departureLabel} 出发，去 ${meetingLocation} 集合，${pickupLabel} 上车`,
             absolute: formatter.absolute
           });
         }
@@ -226,6 +233,7 @@ function buildMembersFromManualResult(
       const person = peopleById.get(stopId);
       if (!person || person.hasCar) continue;
       const pickupLabel = formatter.label(stopOffset || 0);
+      const pickupAddress = person.address || `${person.name}的出发点`;
       members.push({
         personId: person.id,
         personName: person.name,
@@ -235,7 +243,7 @@ function buildMembersFromManualResult(
         departureLabel: pickupLabel,
         pickupLabel,
         destinationArrivalLabel: formatter.label(route.totalDurationSec),
-        actionLabel: `${pickupLabel} 在出发点等 ${route.driverName} 接`,
+        actionLabel: `${pickupLabel} 在 ${pickupAddress} 等 ${route.driverName} 接`,
         absolute: formatter.absolute
       });
     }

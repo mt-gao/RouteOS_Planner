@@ -103,6 +103,7 @@ export type MemberPlan = {
   personName: string;
   pickupPointId: string;
   pickupPointName: string;
+  pickupPointAddress?: string;
   pickupPointKind: "origin" | "meeting";
   assignedDriverId: string;
   assignedDriverName: string;
