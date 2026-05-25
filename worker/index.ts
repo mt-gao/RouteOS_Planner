@@ -316,6 +316,11 @@ async function handleApi(request: Request, env: Env, ctx: any) {
     return json({ status: "ok", hasAmapKey: Boolean(env.AMAP_KEY), hasModelKey: Boolean(modelConfig(env).apiKey), runtime: "cloudflare-worker" });
   }
 
+  if (url.pathname === "/api/city-suggest" && request.method === "GET") {
+    const query = z.object({ keyword: z.string().trim().min(1) }).parse(Object.fromEntries(url.searchParams));
+    return json(await amap.citySuggest(query.keyword));
+  }
+
   if (url.pathname === "/api/amap-js" && request.method === "GET") {
     const callback = String(url.searchParams.get("callback") || "__initAmap");
     if (!/^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/.test(callback)) {
