@@ -852,6 +852,7 @@ async function sendChatMessage(message: string) {
   startChatTicker();
   renderChat();
   chatInput.value = "";
+  chatInput.disabled = true;
   chatSendButton.disabled = true;
   planButton.disabled = true;
   smartPlanButton.disabled = true;
@@ -972,6 +973,7 @@ async function sendChatMessage(message: string) {
     assistantMessage.streaming = false;
     assistantMessage.elapsedSec = assistantMessage.startedAt ? Math.max(0, Math.floor((Date.now() - assistantMessage.startedAt) / 1000)) : assistantMessage.elapsedSec;
     stopChatTicker();
+    chatInput.disabled = false;
     chatSendButton.disabled = false;
     planButton.disabled = false;
     smartPlanButton.disabled = false;
@@ -1070,6 +1072,7 @@ window.addEventListener("keydown", (event) => {
 });
 chatForm.addEventListener("submit", (event) => {
   event.preventDefault();
+  if (chatInput.disabled) return;
   const message = chatInput.value.trim();
   if (!message) return;
   sendChatMessage(message);
