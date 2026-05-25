@@ -49,7 +49,8 @@ export function defaultState(): AppState {
     meetingPoints: [],
     routeResult: null,
     loading: false,
-    error: null
+    error: null,
+    hasGeneratedRoute: false
   };
 }
 

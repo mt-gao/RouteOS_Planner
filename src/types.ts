@@ -38,6 +38,7 @@ export type AppState = {
   routeResult: RoutePlanResponse | null;
   loading: boolean;
   error: string | null;
+  hasGeneratedRoute?: boolean;
 };
 
 export type TimeConstraint = {

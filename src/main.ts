@@ -131,6 +131,7 @@ app.innerHTML = `
           </div>
           <div id="agentSteps" class="agent-steps" aria-live="polite"></div>
           <div id="chatMessages" class="chat-messages"></div>
+          <div id="chatDisabledOverlay" class="chat-disabled-overlay">请先在左侧填写行程信息并生成路线后开始对话</div>
           <form id="chatForm" class="chat-form">
             <textarea id="chatInput" class="text-input" rows="2" placeholder="问 AI 调整路线，例如：叶哥几点下楼？"></textarea>
             <button id="chatSendButton" class="secondary-button" type="submit">发送</button>
@@ -205,6 +206,7 @@ const chatMessagesHost = document.querySelector<HTMLElement>("#chatMessages")!;
 const chatForm = document.querySelector<HTMLFormElement>("#chatForm")!;
 const chatInput = document.querySelector<HTMLTextAreaElement>("#chatInput")!;
 const chatSendButton = document.querySelector<HTMLButtonElement>("#chatSendButton")!;
+const chatDisabledOverlay = document.querySelector<HTMLElement>("#chatDisabledOverlay")!;
 const mapView = createMapView(document.querySelector<HTMLElement>("#map")!, {
   onCityDetected(city) {
     if (!state.destination && state.city === "深圳") {
@@ -296,6 +298,11 @@ function updateChrome() {
   } else {
     mapStatus.textContent = `${confirmedPeople + confirmedDestination}/${state.people.length + 1} 坐标确认`;
   }
+  const chatReady = state.hasGeneratedRoute === true;
+  chatDisabledOverlay.classList.toggle("visible", !chatReady);
+  chatForm.classList.toggle("disabled", !chatReady);
+  chatInput.disabled = !chatReady;
+  chatSendButton.disabled = !chatReady;
 }
 
 function formatElapsed(seconds = 0) {
@@ -786,7 +793,7 @@ async function syncRouteFromManifest(mode: "manual" | "smart", options: { showLo
     });
     const data = (await response.json()) as RoutePlanResponse | { error?: string };
     if (!response.ok) throw new Error("error" in data ? data.error || "路线规划失败" : "路线规划失败");
-    patchState({ loading: false, routeResult: normalizeRouteResponse(data as RoutePlanResponse), error: null });
+    patchState({ loading: false, routeResult: normalizeRouteResponse(data as RoutePlanResponse), error: null, hasGeneratedRoute: true });
     return true;
   } catch (error) {
     patchState({
@@ -895,7 +902,7 @@ async function sendChatMessage(message: string) {
         routeFreshAfterManifest = true;
         updateAssistantProgress(assistantMessage, "已生成路线，正在整理回答");
         state.routeResult = normalizeRouteResponse(data.routeResult as RoutePlanResponse);
-        lastPlanMode = state.routeResult.source === "smart" ? "smart" : "manual";
+        state.hasGeneratedRoute = true;        lastPlanMode = state.routeResult.source === "smart" ? "smart" : "manual";
         state.loading = false;
         state.error = null;
         persistAndPaint();

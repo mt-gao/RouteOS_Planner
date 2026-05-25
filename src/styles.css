@@ -1230,6 +1230,7 @@ select.text-input {
 }
 
 .route-chat-panel {
+  position: relative;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -1429,6 +1430,33 @@ select.text-input {
   color: var(--faint);
   font-size: 11px;
   font-weight: 760;
+}
+
+.chat-disabled-overlay {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: oklch(98.9% 0.003 248 / 0.92);
+  color: var(--faint);
+  font-size: 13px;
+  text-align: center;
+  padding: 32px 20px;
+  line-height: 1.6;
+  cursor: default;
+  backdrop-filter: blur(2px);
+}
+
+.chat-disabled-overlay.visible {
+  display: flex;
+}
+
+.chat-form.disabled {
+  opacity: 0.4;
+  pointer-events: none;
 }
 
 .chat-form {
