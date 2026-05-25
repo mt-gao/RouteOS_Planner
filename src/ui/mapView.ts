@@ -169,12 +169,7 @@ function renderLocalRouteLayer(container: HTMLElement, state: AppState, mode: "f
   });
 
   const svg = container.querySelector<SVGSVGElement>(".fallback-route");
-  const colors = [
-    "oklch(54% 0.18 258)",
-    "oklch(67% 0.18 48)",
-    "oklch(59% 0.15 150)",
-    "oklch(55% 0.18 295)"
-  ];
+  const colors = routeColors;
   paths.forEach((path, index) => {
     if (!svg || path.length <= 1) return;
     const polyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
@@ -199,7 +194,9 @@ function renderLocalRouteLayer(container: HTMLElement, state: AppState, mode: "f
   }
 }
 
-export function createMapView(container: HTMLElement) {
+const routeColors = ["#2563eb", "#ea580c", "#059669", "#9333ea"];
+
+export function createMapView(container: HTMLElement, options?: { onCityDetected?: (city: string) => void }) {
   let amap: any = null;
   let map: any = null;
   let markers: any[] = [];
@@ -217,6 +214,20 @@ export function createMapView(container: HTMLElement) {
       });
       map.addControl(new amap.Scale());
       map.addControl(new amap.ToolBar({ position: { right: "16px", top: "16px" } }));
+      // 定位当前城市
+      amap.plugin("AMap.Geolocation", () => {
+        const geolocation = new amap.Geolocation({
+          showMarker: false,
+          showButton: false,
+          showCircle: false,
+          zoomToAccuracy: false
+        });
+        geolocation.getCityInfo((status: string, result: { city?: string; province?: string }) => {
+          if (status === "complete" && result.city) {
+            options?.onCityDetected?.(result.city.replace(/市$/, ""));
+          }
+        });
+      });
       if (latestState) update(latestState);
     } catch {
       fallback = true;
@@ -250,12 +261,7 @@ export function createMapView(container: HTMLElement) {
     if (markers.length) map.add(markers);
 
     const paths = getRoutePaths(state, points);
-    const colors = [
-      "oklch(54% 0.18 258)",
-      "oklch(67% 0.18 48)",
-      "oklch(59% 0.15 150)",
-      "oklch(55% 0.18 295)"
-    ];
+    const colors = routeColors;
     polylines = paths
       .filter((route) => route.length > 1)
       .map((route, index) => new amap.Polyline({

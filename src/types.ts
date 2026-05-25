@@ -32,11 +32,18 @@ export type AppState = {
   city: string;
   destinationInput: string;
   destination: Suggestion | null;
+  timeConstraint: TimeConstraint | null;
   people: PersonState[];
   meetingPoints: MeetingPointState[];
   routeResult: RoutePlanResponse | null;
   loading: boolean;
   error: string | null;
+};
+
+export type TimeConstraint = {
+  kind: "departure" | "arrival";
+  time: string;
+  source?: "manual" | "chat";
 };
 
 export type RouteSegment = {
@@ -182,6 +189,9 @@ export type RoutePlanResponse = {
   mode: "single-driver" | "multi-driver";
   source?: "manual" | "smart";
   planKind?: PlanKind;
+  timeConstraint?: TimeConstraint;
+  shareText?: string;
+  timePlan?: RouteTimePlan;
   best: RoutePlan;
   alternatives: RoutePlan[];
   driverCandidates: RoutePlan[];
@@ -199,4 +209,34 @@ export type RoutePlanResponse = {
     assignedDriverId?: string;
   }>;
   smartAnalysis?: SmartRouteAnalysis;
+};
+
+export type RouteTimeMember = {
+  personId: string;
+  personName: string;
+  pickupPointName: string;
+  pickupPointKind: "origin" | "meeting";
+  assignedDriverName: string;
+  departureLabel: string;
+  pickupLabel: string;
+  destinationArrivalLabel: string;
+  actionLabel: string;
+  absolute: boolean;
+};
+
+export type RouteTimeDriver = {
+  driverId: string;
+  driverName: string;
+  departureLabel: string;
+  destinationArrivalLabel: string;
+  routeLabel: string;
+  absolute: boolean;
+};
+
+export type RouteTimePlan = {
+  basisLabel: string;
+  driverStartLabel: string;
+  destinationArrivalLabel: string;
+  members: RouteTimeMember[];
+  drivers: RouteTimeDriver[];
 };

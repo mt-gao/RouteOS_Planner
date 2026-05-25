@@ -6,7 +6,8 @@ import { env } from "./env";
 import { planSmartRoute } from "./intelligentPlanner";
 import { planPickupRoutes, planPickupStops } from "./planner";
 import { streamRouteAgent } from "./routeAgent";
-import type { DestinationInput, MeetingPointInput, PersonInput, PickupStopInput } from "./types";
+import { withRouteShare } from "./routeShare";
+import type { DestinationInput, MeetingPointInput, PersonInput, PickupStopInput, TimeConstraint } from "./types";
 
 const app = express();
 const amap = new AmapClient(env.AMAP_KEY, env.AMAP_JS_KEY || env.AMAP_KEY, env.AMAP_SECURITY_JS_CODE);
@@ -41,6 +42,15 @@ const meetingPointSchema = z.object({
   assignedDriverId: z.string().optional()
 });
 
+const timeConstraintSchema = z
+  .object({
+    kind: z.enum(["departure", "arrival"]),
+    time: z.string().regex(/^\d{1,2}:\d{2}$/),
+    source: z.enum(["manual", "chat"]).optional()
+  })
+  .optional()
+  .nullable();
+
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/health", (_req, res) => {
@@ -71,6 +81,16 @@ app.get("/api/suggest", async (req, res, next) => {
       .parse(req.query);
     const suggestions = await amap.suggest(query.keyword, query.city);
     res.json(suggestions);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/city-suggest", async (req, res, next) => {
+  try {
+    const query = z.object({ keyword: z.string().trim().min(1) }).parse(req.query);
+    const cities = await amap.citySuggest(query.keyword);
+    res.json(cities);
   } catch (error) {
     next(error);
   }
@@ -125,9 +145,16 @@ app.post("/api/route/plan", async (req, res, next) => {
         people: z.array(personSchema).min(1).max(8),
         destination: destinationSchema,
         meetingPoints: z.array(meetingPointSchema).default([]),
+        timeConstraint: timeConstraintSchema,
         city: z.string().trim().default("深圳")
       })
-      .parse(req.body) as { people: PersonInput[]; destination: DestinationInput; meetingPoints: MeetingPointInput[]; city: string };
+      .parse(req.body) as {
+        people: PersonInput[];
+        destination: DestinationInput;
+        meetingPoints: MeetingPointInput[];
+        timeConstraint?: TimeConstraint | null;
+        city: string;
+      };
 
     const points = [
       ...body.people.map((person) => ({ id: person.id, name: person.name, lng: person.location.lng, lat: person.location.lat })),
@@ -216,7 +243,7 @@ app.post("/api/route/plan", async (req, res, next) => {
           const distanceM = matrix.distances[pairKey] || 0;
           const transit = await amap.transitDetail(person.location, meeting.location, body.city).catch(() => null);
           const transitLooksUseful = Boolean(transit?.steps.length) && transit!.durationSec <= durationSec * 1.8 + 900;
-          const suggestedMode = transitLooksUseful ? "public_transit" : "taxi";
+          const suggestedMode: "public_transit" | "taxi" = transitLooksUseful ? "public_transit" : "taxi";
           const suggestion =
             suggestedMode === "public_transit"
               ? `建议公共交通到集合点，约 ${Math.round((transit?.durationSec || 0) / 60)} 分钟：${transit?.steps.join("；") || "按高德公交推荐换乘"}。`
@@ -240,16 +267,25 @@ app.post("/api/route/plan", async (req, res, next) => {
       });
     }
 
-    res.json({
+    const routeResponse = {
       generatedAt: new Date().toISOString(),
       mode: planned.mode,
-      source: "manual",
+      source: "manual" as const,
       best: bestWithDetail,
       alternatives: planned.alternatives,
       driverCandidates: planned.driverCandidates,
       driverRoutes,
       meetingRoutes
-    });
+    };
+
+    res.json(
+      withRouteShare(routeResponse, {
+        people: body.people,
+        destination: body.destination,
+        meetingPoints: body.meetingPoints,
+        timeConstraint: body.timeConstraint
+      })
+    );
   } catch (error) {
     next(error);
   }
@@ -261,12 +297,18 @@ app.post("/api/route/smart-plan", async (req, res, next) => {
       .object({
         people: z.array(personSchema).min(2).max(8),
         destination: destinationSchema,
+        timeConstraint: timeConstraintSchema,
         city: z.string().trim().default("深圳")
       })
-      .parse(req.body) as { people: PersonInput[]; destination: DestinationInput; city: string };
+      .parse(req.body) as {
+        people: PersonInput[];
+        destination: DestinationInput;
+        timeConstraint?: TimeConstraint | null;
+        city: string;
+      };
 
     const result = await planSmartRoute(amap, body);
-    res.json(result);
+    res.json(withRouteShare(result, { people: body.people, destination: body.destination, timeConstraint: body.timeConstraint }));
   } catch (error) {
     next(error);
   }
@@ -342,5 +384,5 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
 });
 
 app.listen(env.PORT, "127.0.0.1", () => {
-  console.log(`pickup-route-planner api listening on http://127.0.0.1:${env.PORT}`);
+  console.log(`RouteOS api listening on http://127.0.0.1:${env.PORT}`);
 });

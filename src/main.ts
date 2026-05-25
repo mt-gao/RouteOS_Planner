@@ -5,7 +5,7 @@ import { renderMeetingPoints } from "./ui/meetingPoints";
 import { renderPersonList } from "./ui/personList";
 import { renderRouteResult } from "./ui/routeResult";
 import { createAddressInput } from "./ui/addressInput";
-import type { AppState, RoutePlanResponse, Suggestion } from "./types";
+import type { AppState, RoutePlanResponse, Suggestion, TimeConstraint } from "./types";
 
 let state = loadState();
 type ChatMessage = {
@@ -21,6 +21,7 @@ type ChatMessage = {
 type ManifestPatch = {
   city?: string;
   destination?: { name: string; address: string; lng: number; lat: number } | string | null;
+  timeConstraint?: TimeConstraint | null;
   people?: Array<{
     id?: string;
     name: string;
@@ -62,10 +63,10 @@ app.innerHTML = `
   <div class="app-shell">
     <header class="topbar">
       <div class="brand-block">
-        <span class="brand-mark">接</span>
+        <img class="brand-mark" src="/logo1.png" alt="RouteOS" />
         <div>
-          <h1>接人路线规划</h1>
-          <p>多人点位、司机分配、集合路线</p>
+          <h1>RouteOS</h1>
+          <p>多人点位、司机分配、集合路线 · 贡献者：wegotnoplan、mt-gao</p>
         </div>
       </div>
       <div class="topbar-status" aria-label="当前规划状态">
@@ -75,7 +76,10 @@ app.innerHTML = `
       </div>
       <div class="city-control">
         <label class="field-label compact" for="cityInput">城市</label>
-        <input id="cityInput" class="text-input city-input" value="${state.city}" />
+        <div class="city-input-wrap">
+          <input id="cityInput" class="text-input city-input" value="${state.city}" autocomplete="off" />
+          <div id="citySuggestions" class="suggestion-menu"></div>
+        </div>
       </div>
     </header>
     <main class="workspace">
@@ -135,6 +139,46 @@ app.innerHTML = `
       </aside>
     </main>
   </div>
+  <div id="welcomeModal" class="welcome-modal" role="dialog" aria-modal="true" aria-labelledby="welcomeTitle">
+    <div class="welcome-dialog">
+      <span class="welcome-kicker">RouteOS</span>
+      <h2 id="welcomeTitle">多人接送路线调度台</h2>
+      <p>RouteOS 用来把终点、乘客、司机和集合点整理成可执行的接人方案。它会基于高德路线估算接人顺序、集合方式、每个人的出发/上车时间，并提供可复制到微信的路线摘要。</p>
+      <div class="welcome-grid">
+        <section>
+          <h3>最佳实践</h3>
+          <ol>
+            <li>先确认城市、终点和每个人的地址坐标。</li>
+            <li>勾选司机，必要时把成员拖入集合点。</li>
+            <li>如有到达时间，先在左侧填好，再生成路线。</li>
+            <li>生成后先看地图路线，再复制右侧摘要发给成员。</li>
+            <li>跟AI对话可以调整路线方案、修改清单或确认出发时间。</li>
+          </ol>
+        </section>
+        <section>
+          <h3>贡献者</h3>
+          <div class="contributors">
+            <div class="contributor">
+              <img class="contributor-avatar" src="https://avatars.githubusercontent.com/u/88580745?v=4" alt="wegotnoplan" />
+              <i>wegotnoplan</i>
+            </div>
+            <div class="contributor">
+              <img class="contributor-avatar" src="https://avatars.githubusercontent.com/u/96906510?v=4" alt="mt-gao" />
+              <i>mt-gao</i>
+            </div>
+          </div>
+        </section>
+      </div>
+      <div class="welcome-notes">
+        <strong>备注</strong>
+        <ol>
+          <li>高德服务不支持高并发，请不要连续点击路线生成。</li>
+          <li>AI功能由DeepSeek v4 Flash实现，无法对话联系高哥。</li>
+        </ol>
+      </div>
+      <button id="welcomeCloseButton" class="primary-button" type="button">进入 RouteOS</button>
+    </div>
+  </div>
 `;
 
 const destinationHost = document.querySelector<HTMLElement>("#destinationHost")!;
@@ -144,6 +188,8 @@ const resultHost = document.querySelector<HTMLElement>("#resultHost")!;
 const cityInput = document.querySelector<HTMLInputElement>("#cityInput")!;
 const planButton = document.querySelector<HTMLButtonElement>("#planButton")!;
 const smartPlanButton = document.querySelector<HTMLButtonElement>("#smartPlanButton")!;
+const welcomeModal = document.querySelector<HTMLElement>("#welcomeModal")!;
+const welcomeCloseButton = document.querySelector<HTMLButtonElement>("#welcomeCloseButton")!;
 const workspace = document.querySelector<HTMLElement>(".workspace")!;
 const resultPanel = document.querySelector<HTMLElement>(".result-panel")!;
 const leftResizeHandle = document.querySelector<HTMLElement>(".resize-left")!;
@@ -159,7 +205,15 @@ const chatMessagesHost = document.querySelector<HTMLElement>("#chatMessages")!;
 const chatForm = document.querySelector<HTMLFormElement>("#chatForm")!;
 const chatInput = document.querySelector<HTMLTextAreaElement>("#chatInput")!;
 const chatSendButton = document.querySelector<HTMLButtonElement>("#chatSendButton")!;
-const mapView = createMapView(document.querySelector<HTMLElement>("#map")!);
+const mapView = createMapView(document.querySelector<HTMLElement>("#map")!, {
+  onCityDetected(city) {
+    if (!state.destination && state.city === "深圳") {
+      state.city = city;
+      cityInput.value = city;
+      saveState(state);
+    }
+  }
+});
 
 function applySavedPanelWidths() {
   const left = localStorage.getItem("pickup-route-left-panel-width");
@@ -248,6 +302,35 @@ function formatElapsed(seconds = 0) {
   const min = Math.floor(seconds / 60);
   const sec = seconds % 60;
   return `${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
+
+function normalizeClock(hour: number, minute: number, period = "") {
+  let normalizedHour = hour;
+  if (/下午|晚上|傍晚/.test(period) && normalizedHour < 12) normalizedHour += 12;
+  if (/中午/.test(period) && normalizedHour < 11) normalizedHour += 12;
+  if (/凌晨|早上|上午/.test(period) && normalizedHour === 12) normalizedHour = 0;
+  if (normalizedHour < 0 || normalizedHour > 23 || minute < 0 || minute > 59) return null;
+  return `${String(normalizedHour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function extractTimeConstraint(message: string): TimeConstraint | null {
+  const match = message.match(/(凌晨|早上|上午|中午|下午|傍晚|晚上)?\s*(\d{1,2})(?:[:：](\d{1,2})|[点时]\s*(\d{1,2})?分?)/);
+  if (!match) return null;
+  const kind = /出发|发车|开车|开始/.test(message)
+    ? "departure"
+    : /到达|抵达|到终点|到目的地|到场|到\b|之前|以前|前/.test(message)
+      ? "arrival"
+      : null;
+  if (!kind) return null;
+  const hour = Number(match[2]);
+  const minute = match[3] === undefined && match[4] === undefined ? 0 : Number(match[3] || match[4]);
+  const time = normalizeClock(hour, minute, match[1] || "");
+  return time ? { kind, time, source: "chat" } : null;
+}
+
+function timeConstraintLabel(timeConstraint: TimeConstraint | null) {
+  if (!timeConstraint) return "未设置具体时间";
+  return timeConstraint.kind === "arrival" ? `${timeConstraint.time} 到达目的地` : `${timeConstraint.time} 司机出发`;
 }
 
 function stopChatTicker() {
@@ -388,6 +471,10 @@ function applyManifestPatch(patch: ManifestPatch, options: { routeSyncPending?: 
     cityInput.value = patch.city;
   }
 
+  if (patch.timeConstraint !== undefined) {
+    state.timeConstraint = patch.timeConstraint;
+  }
+
   if (patch.destination !== undefined) {
     if (!patch.destination || typeof patch.destination === "string") {
       state.destination = null;
@@ -476,6 +563,35 @@ function renderDestination() {
       }
     })
   );
+
+  const schedule = document.createElement("div");
+  schedule.className = "time-constraint-panel";
+  const inputId = "arrivalTimeInput";
+  const arrivalValue = state.timeConstraint?.kind === "arrival" ? state.timeConstraint.time : "";
+  schedule.innerHTML = `
+    <label class="field-label compact" for="${inputId}">到达时间</label>
+    <div class="time-constraint-row">
+      <input id="${inputId}" class="text-input" type="time" value="${arrivalValue}" />
+      <button class="secondary-button compact-button" type="button">清除</button>
+    </div>
+    <div class="inline-note">${timeConstraintLabel(state.timeConstraint)}</div>
+  `;
+  const arrivalInput = schedule.querySelector<HTMLInputElement>("input")!;
+  const clearButton = schedule.querySelector<HTMLButtonElement>("button")!;
+  arrivalInput.addEventListener("input", () => {
+    state.timeConstraint = arrivalInput.value ? { kind: "arrival", time: arrivalInput.value, source: "manual" } : null;
+    state.routeResult = null;
+    renderDestination();
+    persistAndPaint();
+  });
+  clearButton.disabled = !state.timeConstraint;
+  clearButton.addEventListener("click", () => {
+    state.timeConstraint = null;
+    state.routeResult = null;
+    renderDestination();
+    persistAndPaint();
+  });
+  destinationHost.append(schedule);
 }
 
 function renderPeople() {
@@ -615,6 +731,7 @@ function buildRoutePayload() {
       assignedDriverId: person.assignedDriverId || undefined
     })),
     city: state.city,
+    timeConstraint: state.timeConstraint || undefined,
     destination: {
       name: state.destination!.name,
       address: state.destination!.address || state.destinationInput,
@@ -704,6 +821,15 @@ async function sendChatMessage(message: string) {
   agentSteps = [];
   let manifestChanged = false;
   let routeFreshAfterManifest = false;
+  let timeConstraintChanged = false;
+  const hadRouteBeforeTimeConstraint = Boolean(state.routeResult);
+  const extractedTimeConstraint = extractTimeConstraint(message);
+  if (extractedTimeConstraint) {
+    state.timeConstraint = extractedTimeConstraint;
+    timeConstraintChanged = true;
+    renderDestination();
+    persistAndPaint();
+  }
   chatMessages = [...chatMessages, { role: "user", content: message }];
   const assistantMessage: ChatMessage = {
     role: "assistant",
@@ -814,6 +940,16 @@ async function sendChatMessage(message: string) {
       stopChatTicker();
       updateAssistantProgress(assistantMessage, synced ? "右侧路线已同步" : "右侧路线需要补全信息后再生成");
     }
+    if (timeConstraintChanged && !manifestChanged && !routeFreshAfterManifest && (hadRouteBeforeTimeConstraint || !validateInput(state.meetingPoints.length ? "manual" : lastPlanMode))) {
+      assistantMessage.streaming = true;
+      startChatTicker();
+      updateAssistantProgress(assistantMessage, "正在按新的时间约束刷新右侧规划");
+      const syncMode: "manual" | "smart" = state.meetingPoints.length ? "manual" : lastPlanMode;
+      const synced = await syncRouteFromManifest(syncMode, { showLoading: true });
+      assistantMessage.streaming = false;
+      stopChatTicker();
+      updateAssistantProgress(assistantMessage, synced ? "右侧时间已换算" : "右侧时间需要补全信息后再生成");
+    }
     if (!assistantMessage.content.trim()) {
       assistantMessage.content = assistantMessage.status === "处理完成" ? "处理完成，路线结果已更新到右侧。" : "没有收到可用回复。";
       if (assistantMessage.status !== "处理完成") assistantMessage.source = "fallback";
@@ -846,9 +982,71 @@ function requestSmartAiPlan() {
   sendChatMessage("请根据当前行程清单生成 AI 规划，跳过手动集合点。请比较逐个接人、单集合点、多集合点和混合接人，并把最终集合点写入左侧清单。");
 }
 
+const citySuggestionsHost = document.querySelector<HTMLElement>("#citySuggestions")!;
+let citySuggestTimer = 0;
+let latestCityRequest = 0;
+
+function renderCitySuggestions(query: string) {
+  citySuggestionsHost.innerHTML = "";
+  if (!query || query.length < 1) {
+    citySuggestionsHost.classList.remove("open");
+    return;
+  }
+  citySuggestionsHost.innerHTML = `<div class="suggestion-empty">搜索中</div>`;
+  citySuggestionsHost.classList.add("open");
+}
+
+async function fetchCitySuggestions(keyword: string) {
+  const params = new URLSearchParams({ keyword });
+  const response = await fetch(`/api/city-suggest?${params.toString()}`);
+  return (await response.json()) as string[];
+}
+
 cityInput.addEventListener("input", () => {
   state.city = cityInput.value.trim() || "深圳";
   saveState(state);
+  window.clearTimeout(citySuggestTimer);
+  const value = cityInput.value.trim();
+  if (value.length < 1) {
+    citySuggestionsHost.classList.remove("open");
+    return;
+  }
+  renderCitySuggestions(value);
+  citySuggestTimer = window.setTimeout(async () => {
+    const requestId = Date.now();
+    latestCityRequest = requestId;
+    try {
+      const cities = await fetchCitySuggestions(value);
+      if (latestCityRequest !== requestId) return;
+      citySuggestionsHost.innerHTML = "";
+      if (!cities.length) {
+        citySuggestionsHost.classList.remove("open");
+        return;
+      }
+      for (const city of cities) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "suggestion-item";
+        button.textContent = city;
+        button.addEventListener("click", () => {
+          cityInput.value = city;
+          state.city = city;
+          citySuggestionsHost.classList.remove("open");
+          saveState(state);
+        });
+        citySuggestionsHost.append(button);
+      }
+      citySuggestionsHost.classList.add("open");
+    } catch {
+      if (latestCityRequest === requestId) {
+        citySuggestionsHost.classList.remove("open");
+      }
+    }
+  }, 200);
+});
+
+cityInput.addEventListener("blur", () => {
+  window.setTimeout(() => citySuggestionsHost.classList.remove("open"), 160);
 });
 
 applySavedPanelWidths();
@@ -857,6 +1055,12 @@ rightResizeHandle.addEventListener("pointerdown", (event) => startResize("right"
 rightSplitter.addEventListener("pointerdown", startRightPanelResize);
 planButton.addEventListener("click", () => planRoute("manual"));
 smartPlanButton.addEventListener("click", requestSmartAiPlan);
+welcomeCloseButton.addEventListener("click", () => {
+  welcomeModal.classList.add("hidden");
+});
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") welcomeModal.classList.add("hidden");
+});
 chatForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const message = chatInput.value.trim();

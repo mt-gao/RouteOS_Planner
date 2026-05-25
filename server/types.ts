@@ -25,6 +25,12 @@ export type DestinationInput = {
   location: Point;
 };
 
+export type TimeConstraint = {
+  kind: "departure" | "arrival";
+  time: string;
+  source?: "manual" | "chat";
+};
+
 export type MeetingPointInput = {
   id: string;
   name: string;

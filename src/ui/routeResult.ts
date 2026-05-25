@@ -1,4 +1,4 @@
-import type { ExecutionTimelineItem, MemberPlan, RoutePlan, RoutePlanResponse } from "../types";
+import type { ExecutionTimelineItem, MemberPlan, RoutePlan, RoutePlanResponse, RouteTimePlan } from "../types";
 
 function minutes(seconds: number) {
   return Math.round(seconds / 60);
@@ -22,6 +22,20 @@ function formatOffset(seconds = 0) {
   const min = minutes(seconds);
   if (min < 0) return `T-${Math.abs(min)} 分钟`;
   return `T+${min} 分钟`;
+}
+
+function displayOffset(seconds = 0, timePlan?: RouteTimePlan) {
+  if (!timePlan?.drivers.length) return formatOffset(seconds);
+  const firstDriver = timePlan.drivers[0];
+  if (!firstDriver.absolute) return formatOffset(seconds);
+  const match = firstDriver.departureLabel.match(/^(\d{2}):(\d{2})$/);
+  if (!match) return formatOffset(seconds);
+  const base = Number(match[1]) * 60 + Number(match[2]);
+  const total = base + minutes(seconds);
+  const normalized = ((total % 1440) + 1440) % 1440;
+  const hour = Math.floor(normalized / 60);
+  const minute = normalized % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
 function planKindLabel(kind?: RoutePlanResponse["planKind"]) {
@@ -56,7 +70,33 @@ function renderCompactPlan(plan: RoutePlan, label: string) {
   return card;
 }
 
-function renderTimeline(items: ExecutionTimelineItem[]) {
+function renderShareButton(result: RoutePlanResponse) {
+  if (!result.shareText) return null;
+  const row = document.createElement("div");
+  row.className = "share-route-row";
+  row.innerHTML = `
+    <span>${result.timePlan?.basisLabel || "复制给成员"}</span>
+    <button class="secondary-button compact-button" type="button">复制路线</button>
+  `;
+  const button = row.querySelector<HTMLButtonElement>("button")!;
+  button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(result.shareText || "");
+      button.textContent = "已复制";
+      window.setTimeout(() => {
+        button.textContent = "复制路线";
+      }, 1600);
+    } catch {
+      button.textContent = "复制失败";
+      window.setTimeout(() => {
+        button.textContent = "复制路线";
+      }, 1600);
+    }
+  });
+  return row;
+}
+
+function renderTimeline(items: ExecutionTimelineItem[], timePlan?: RouteTimePlan) {
   if (!items.length) return null;
   const section = document.createElement("section");
   section.className = "execution-section";
@@ -68,10 +108,48 @@ function renderTimeline(items: ExecutionTimelineItem[]) {
     const row = document.createElement("li");
     const boarding = item.boardingNames.length ? `上车：${item.boardingNames.join("、")}` : item.type === "destination" ? "抵达终点" : "无上车成员";
     row.innerHTML = `
-      <strong>${formatOffset(item.arrivalOffsetSec)} ${item.stopName}</strong>
+      <strong>${displayOffset(item.arrivalOffsetSec, timePlan)} ${item.stopName}</strong>
       <span>${boarding}。本段车程 ${formatDuration(item.driveDurationSec)}，${formatDistance(item.distanceM)}</span>
     `;
     list.append(row);
+  }
+  section.append(list);
+  return section;
+}
+
+function renderTimePlan(timePlan?: RouteTimePlan) {
+  if (!timePlan || (!timePlan.members.length && !timePlan.drivers.length)) return null;
+  const section = document.createElement("section");
+  section.className = "member-plan-section time-plan-section";
+  section.innerHTML = `<h3>时间安排</h3><div class="time-plan-basis">${timePlan.basisLabel}</div>`;
+  const list = document.createElement("div");
+  list.className = "member-plan-list";
+  for (const driver of timePlan.drivers) {
+    const card = document.createElement("div");
+    card.className = "member-plan-card driver-time-card";
+    card.innerHTML = `
+      <div>
+        <strong>${driver.driverName}</strong>
+        <span>司机</span>
+      </div>
+      <p>${driver.departureLabel} 出发，预计 ${driver.destinationArrivalLabel} 到达目的地。</p>
+      <small>${driver.routeLabel}</small>
+    `;
+    list.append(card);
+  }
+  for (const member of timePlan.members) {
+    const card = document.createElement("div");
+    card.className = "member-plan-card";
+    card.dataset.personPlanId = member.personId;
+    card.innerHTML = `
+      <div>
+        <strong>${member.personName}</strong>
+        <span>${member.pickupPointKind === "meeting" ? "集合" : "等车"}</span>
+      </div>
+      <p>${member.actionLabel}。</p>
+      <small>预计 ${member.destinationArrivalLabel} 到达目的地，司机：${member.assignedDriverName}</small>
+    `;
+    list.append(card);
   }
   section.append(list);
   return section;
@@ -226,6 +304,9 @@ export function renderRouteResult(host: HTMLElement, result: RoutePlanResponse |
   `;
   host.append(title);
 
+  const shareButton = renderShareButton(result);
+  if (shareButton) host.append(shareButton);
+
   const metrics = document.createElement("div");
   metrics.className = "metric-grid";
   appendMetric(metrics, "总耗时", formatDuration(result.best.totalDurationSec));
@@ -240,14 +321,20 @@ export function renderRouteResult(host: HTMLElement, result: RoutePlanResponse |
   const warnings = renderWarnings(result);
   if (warnings) host.append(warnings);
 
-  const timeline = renderTimeline(result.executionTimeline || []);
+  const timeline = renderTimeline(result.executionTimeline || [], result.timePlan);
   if (timeline) host.append(timeline);
 
-  const memberPlans = renderMemberPlans(result.memberPlans || []);
-  if (memberPlans) host.append(memberPlans);
+  const timePlan = renderTimePlan(result.timePlan);
+  if (timePlan) host.append(timePlan);
+  else {
+    const memberPlans = renderMemberPlans(result.memberPlans || []);
+    if (memberPlans) host.append(memberPlans);
+  }
 
-  const meetingRoutes = renderMeetingRoutes(result);
-  if (meetingRoutes) host.append(meetingRoutes);
+  if (!timePlan) {
+    const meetingRoutes = renderMeetingRoutes(result);
+    if (meetingRoutes) host.append(meetingRoutes);
+  }
 
   if (!result.executionTimeline?.length) {
     const details = result.mode === "multi-driver" ? result.driverRoutes : [result.best];

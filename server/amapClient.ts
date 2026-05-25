@@ -267,6 +267,18 @@ export class AmapClient {
     };
   }
 
+  async citySuggest(keyword: string): Promise<string[]> {
+    const url = new URL("/v3/config/district", AMAP_REST_BASE);
+    url.searchParams.set("key", this.key);
+    url.searchParams.set("keywords", keyword);
+    url.searchParams.set("subdistrict", "0");
+    url.searchParams.set("extensions", "base");
+    const data = await fetchJson<{ districts?: Array<{ name?: string; citycode?: string }> }>(url);
+    return (data.districts || [])
+      .map((d) => d.name)
+      .filter(Boolean) as string[];
+  }
+
   async transitDetail(origin: Point, destination: Point, city = "深圳"): Promise<TransitRouteDetail | null> {
     const url = new URL("/v3/direction/transit/integrated", AMAP_REST_BASE);
     url.searchParams.set("key", this.key);

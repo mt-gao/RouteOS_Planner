@@ -97,15 +97,8 @@ button:disabled {
 .brand-mark {
   width: 40px;
   height: 40px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--line-strong);
+  object-fit: contain;
   border-radius: var(--radius);
-  color: var(--ink);
-  background: var(--paper);
-  box-shadow: none;
-  font-size: 18px;
-  font-weight: 840;
 }
 
 .topbar h1,
@@ -295,6 +288,123 @@ button:disabled {
   user-select: none;
 }
 
+.welcome-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: oklch(18% 0.012 250 / 0.46);
+}
+
+.welcome-modal.hidden {
+  display: none;
+}
+
+.welcome-dialog {
+  width: min(720px, 100%);
+  max-height: calc(100vh - 44px);
+  overflow: auto;
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--paper);
+  box-shadow: var(--shadow-md);
+}
+
+.welcome-kicker {
+  color: var(--route);
+  font-size: 11px;
+  font-weight: 840;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.welcome-dialog h2,
+.welcome-dialog h3,
+.welcome-dialog p,
+.welcome-dialog ol {
+  margin: 0;
+}
+
+.welcome-dialog h2 {
+  color: var(--ink);
+  font-size: 24px;
+  line-height: 1.16;
+  font-weight: 840;
+}
+
+.welcome-dialog h3 {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 820;
+}
+
+.contributors {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.contributor {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.contributor-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.contributor i {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.welcome-dialog p,
+.welcome-dialog li {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.welcome-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(180px, 0.6fr);
+  gap: 10px;
+}
+
+.welcome-grid section,
+.welcome-notes {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--field);
+}
+
+.welcome-dialog ol {
+  padding-left: 20px;
+}
+
+.welcome-notes {
+  background: var(--warning-soft);
+  border-color: oklch(84% 0.09 82);
+}
+
+.welcome-notes strong {
+  color: oklch(38% 0.1 82);
+  font-size: 13px;
+  font-weight: 840;
+}
+
 .map-panel {
   min-width: 0;
   min-height: 560px;
@@ -437,6 +547,20 @@ select.text-input {
 .text-input.subtle {
   min-height: 36px;
   background: var(--field-muted);
+}
+
+.city-input-wrap {
+  position: relative;
+}
+
+.city-input-wrap .suggestion-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 280px;
+  overflow: auto;
 }
 
 .city-input {
@@ -755,6 +879,23 @@ select.text-input {
   background: var(--field);
 }
 
+.time-constraint-panel {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--field);
+}
+
+.time-constraint-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
 .full-width {
   width: 100%;
 }
@@ -835,6 +976,12 @@ select.text-input {
   background: oklch(97.5% 0.012 238);
 }
 
+.compact-button {
+  min-height: 34px;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
 .ghost-button {
   border: 1px solid transparent;
   color: var(--muted);
@@ -893,6 +1040,26 @@ select.text-input {
   color: oklch(39% 0.055 245);
   font-size: 13px;
   line-height: 1.4;
+}
+
+.share-route-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin: -4px 0 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--route-soft);
+}
+
+.share-route-row span,
+.time-plan-basis {
+  color: var(--route-deep);
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1.45;
 }
 
 .result-panel h3,
@@ -1058,9 +1225,10 @@ select.text-input {
 
 .route-chat-panel {
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+  overflow: hidden;
   padding: 14px 16px 16px;
   background: oklch(98.9% 0.003 248);
 }
@@ -1087,11 +1255,13 @@ select.text-input {
 }
 
 .chat-messages {
+  flex: 1 1 auto;
   min-height: 0;
   display: grid;
   align-content: start;
   gap: 8px;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 0 2px 0 0;
   border: 0;
   border-radius: 0;
@@ -1120,6 +1290,7 @@ select.text-input {
 }
 
 .chat-message {
+  min-width: 0;
   display: grid;
   gap: 7px;
   max-width: 94%;
@@ -1242,6 +1413,7 @@ select.text-input {
 .chat-message p {
   margin: 0;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   color: var(--ink);
   font-size: 13px;
   line-height: 1.48;
@@ -1345,6 +1517,11 @@ select.text-input {
 .member-plan-card p {
   color: oklch(34% 0.034 245);
   font-size: 13px;
+}
+
+.driver-time-card {
+  background: var(--driver-soft);
+  border-color: oklch(84% 0.07 58);
 }
 
 .warning-row {
@@ -1712,8 +1889,11 @@ select.text-input {
   }
 
   .meeting-top,
+  .welcome-grid,
   .metric-grid,
   .metric-grid.compact,
+  .time-constraint-row,
+  .share-route-row,
   .chat-form {
     grid-template-columns: 1fr;
   }

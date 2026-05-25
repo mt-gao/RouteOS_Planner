@@ -1,6 +1,6 @@
 import type { AppState, MeetingPointState, PersonState, Suggestion } from "./types";
 
-const STORAGE_KEY = "pickup-route-planner-state-v1";
+const STORAGE_KEY = "routeos-state-v1";
 
 function id() {
   return Math.random().toString(36).slice(2, 9);
@@ -44,6 +44,7 @@ export function defaultState(): AppState {
     city: "深圳",
     destinationInput: "",
     destination: null,
+    timeConstraint: null,
     people: [createPerson(), createPerson()],
     meetingPoints: [],
     routeResult: null,
