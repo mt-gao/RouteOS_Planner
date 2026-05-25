@@ -897,8 +897,9 @@ select.text-input {
 }
 
 .time-constraint-row input[type="time"] {
-  width: 100%;
+  width: 80%;
   min-width: 0;
+  justify-self: center;
 }
 
 .full-width {
