@@ -72,8 +72,8 @@ type EvaluatedScenario = {
   score: number;
 };
 
-const MAX_CANDIDATE_GROUPS = 5;
-const MAX_CANDIDATES_PER_GROUP = 3;
+const MAX_CANDIDATE_GROUPS = 3;
+const MAX_CANDIDATES_PER_GROUP = 2;
 const MAX_SCENARIOS_TO_SCORE = 14;
 
 function minutes(seconds: number) {
@@ -307,19 +307,7 @@ async function enrichMemberRoute(
   candidate: MeetingCandidate,
   fallback: SmartMemberRoute
 ): Promise<SmartMemberRoute> {
-  const transit = await amap.transitDetail(member.location, candidate, input.city).catch(() => null);
-  const transitLooksUseful =
-    Boolean(transit?.steps.length) && transit!.durationSec <= fallback.durationSec * 1.8 + 900 && transit!.walkingDistanceM <= 2400;
-  if (!transitLooksUseful || !transit) return fallback;
-  return {
-    personId: member.id,
-    personName: member.name,
-    durationSec: transit.durationSec,
-    distanceM: transit.walkingDistanceM,
-    suggestedMode: "public_transit",
-    suggestion: `建议公共交通到 ${candidate.name}，约 ${formatDuration(transit.durationSec)}：${transit.steps.join("；") || "按高德公交推荐换乘"}。`,
-    transit
-  };
+  return fallback;
 }
 
 function stopById(stops: ScenarioStop[], id: string) {
@@ -503,21 +491,19 @@ async function attachRouteDetails(
   stops: ScenarioStop[]
 ): Promise<RoutePlanWithDetail[]> {
   const stopsById = new Map(stops.map((stop) => [stop.id, stop]));
-  const detailed: RoutePlanWithDetail[] = [];
-  for (const route of routes) {
-    const driver = input.people.find((person) => person.id === route.driverId);
-    if (!driver) {
-      detailed.push(route);
-      continue;
-    }
-    const waypoints = route.orderedPassengerIds
-      .map((id) => stopsById.get(id))
-      .filter(Boolean)
-      .map((stop) => stop!.location);
-    const routeDetail = await amap.routeDetail(driver.location, waypoints, input.destination.location).catch(() => undefined);
-    detailed.push({ ...route, routeDetail });
-  }
-  return detailed;
+  const results = await Promise.all(
+    routes.map(async (route) => {
+      const driver = input.people.find((person) => person.id === route.driverId);
+      if (!driver) return route;
+      const waypoints = route.orderedPassengerIds
+        .map((id) => stopsById.get(id))
+        .filter(Boolean)
+        .map((stop) => stop!.location);
+      const routeDetail = await amap.routeDetail(driver.location, waypoints, input.destination.location).catch(() => undefined);
+      return { ...route, routeDetail };
+    })
+  );
+  return results;
 }
 
 async function evaluateScenario(input: SmartPlanInput, scenario: Scenario, matrix: MatrixResult): Promise<EvaluatedScenario | null> {
