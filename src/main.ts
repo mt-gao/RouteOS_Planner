@@ -382,6 +382,7 @@ function normalizeRouteResponse(result: RoutePlanResponse): RoutePlanResponse {
 }
 
 function renderChat() {
+  const wasNearBottom = chatMessagesHost.scrollTop + chatMessagesHost.clientHeight >= chatMessagesHost.scrollHeight - 40;
   agentStepsHost.innerHTML = "";
   chatMessagesHost.innerHTML = "";
   for (const message of chatMessages) {
@@ -434,7 +435,9 @@ function renderChat() {
     }
     chatMessagesHost.append(bubble);
   }
-  chatMessagesHost.scrollTop = chatMessagesHost.scrollHeight;
+  if (wasNearBottom) {
+    chatMessagesHost.scrollTop = chatMessagesHost.scrollHeight;
+  }
 }
 
 function localId(prefix: string) {
