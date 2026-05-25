@@ -896,6 +896,11 @@ select.text-input {
   align-items: center;
 }
 
+.time-constraint-row input[type="time"] {
+  width: 100%;
+  min-width: 0;
+}
+
 .full-width {
   width: 100%;
 }
