@@ -298,7 +298,7 @@ function updateChrome() {
   } else {
     mapStatus.textContent = `${confirmedPeople + confirmedDestination}/${state.people.length + 1} 坐标确认`;
   }
-  const chatReady = state.hasGeneratedRoute === true;
+  const chatReady = state.hasGeneratedRoute === true || state.loading === true;
   chatDisabledOverlay.classList.toggle("visible", !chatReady);
   chatForm.classList.toggle("disabled", !chatReady);
   chatInput.disabled = !chatReady;
@@ -420,7 +420,7 @@ function renderChat() {
 
     const content = document.createElement("p");
     content.textContent =
-      message.content.trim() || (message.streaming ? "正在处理你的请求，路线计算完成后会在这里继续流式输出回答。" : "");
+      message.content.trim() || (message.streaming ? "正在处理你的请求，路线计算完成后会在这里继续输出回答。" : "");
     bubble.append(content);
     if (message.source === "fallback") {
       const source = document.createElement("small");
@@ -880,7 +880,7 @@ async function sendChatMessage(message: string) {
     let buffer = "";
     const handleEvent = (event: string, data: any) => {
       if (event === "token") {
-        if (!assistantMessage.content.trim()) assistantMessage.status = "正在流式输出回答";
+        if (!assistantMessage.content.trim()) assistantMessage.status = "正在输出回答";
         assistantMessage.content += data.content || "";
         renderChat();
       }
