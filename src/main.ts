@@ -8,7 +8,16 @@ import { createAddressInput } from "./ui/addressInput";
 import type { AppState, RoutePlanResponse, Suggestion } from "./types";
 
 let state = loadState();
-type ChatMessage = { role: "assistant" | "user"; content: string; source?: "model" | "fallback" };
+type ChatMessage = {
+  role: "assistant" | "user";
+  content: string;
+  source?: "model" | "fallback";
+  streaming?: boolean;
+  status?: string;
+  startedAt?: number;
+  elapsedSec?: number;
+  steps?: string[];
+};
 type ManifestPatch = {
   city?: string;
   destination?: { name: string; address: string; lng: number; lat: number } | string | null;
@@ -38,8 +47,13 @@ type ManifestPatch = {
   explanation?: string;
 };
 let chatMessages: ChatMessage[] = [
-  { role: "assistant", content: "生成路线后，可以问我：能不能更快、谁适合坐地铁、9点前集合时某人最晚几点出发，或者直接让我更新左侧清单。" }
+  { role: "assistant", content: "可以直接让我生成规划，也可以问某个人几点出发。我会把完整方案放到右侧，只在这里给结论。" }
 ];
+let agentSteps: string[] = [];
+let focusPersonId = "";
+let focusStopId = "";
+let chatTickTimer: number | null = null;
+let lastPlanMode: "manual" | "smart" = "manual";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("App root not found");
@@ -97,20 +111,24 @@ app.innerHTML = `
       </section>
       <div class="resize-handle resize-right" title="拖动调整结果区宽度"></div>
       <aside class="result-panel">
-        <div class="panel-heading result-heading">
-          <span>Decision</span>
-          <h2>路线结果</h2>
-          <p>生成后查看司机路线、集合方式和备选顺序。</p>
+        <div class="result-scroll-region">
+          <div class="panel-heading result-heading">
+            <span>Decision</span>
+            <h2>路线结果</h2>
+            <p>生成后查看司机路线、集合方式和备选顺序。</p>
+          </div>
+          <div id="resultHost"></div>
         </div>
-        <div id="resultHost"></div>
-        <section class="chat-panel">
+        <div class="right-splitter" title="拖动调整计划清单和聊天框高度"></div>
+        <section class="route-chat-panel" aria-label="AI 调度对话">
           <div class="chat-heading">
-            <span>Route Chat</span>
+            <span>AI Dispatcher</span>
             <strong>方案对话</strong>
           </div>
+          <div id="agentSteps" class="agent-steps" aria-live="polite"></div>
           <div id="chatMessages" class="chat-messages"></div>
           <form id="chatForm" class="chat-form">
-            <textarea id="chatInput" class="text-input" rows="2" placeholder="例如：如果9点前全员集合，丙最晚几点出发？"></textarea>
+            <textarea id="chatInput" class="text-input" rows="2" placeholder="问 AI 调整路线，例如：叶哥几点下楼？"></textarea>
             <button id="chatSendButton" class="secondary-button" type="submit">发送</button>
           </form>
         </section>
@@ -127,12 +145,16 @@ const cityInput = document.querySelector<HTMLInputElement>("#cityInput")!;
 const planButton = document.querySelector<HTMLButtonElement>("#planButton")!;
 const smartPlanButton = document.querySelector<HTMLButtonElement>("#smartPlanButton")!;
 const workspace = document.querySelector<HTMLElement>(".workspace")!;
+const resultPanel = document.querySelector<HTMLElement>(".result-panel")!;
 const leftResizeHandle = document.querySelector<HTMLElement>(".resize-left")!;
 const rightResizeHandle = document.querySelector<HTMLElement>(".resize-right")!;
+const rightSplitter = document.querySelector<HTMLElement>(".right-splitter")!;
 const peopleCount = document.querySelector<HTMLElement>("#peopleCount")!;
 const driverCount = document.querySelector<HTMLElement>("#driverCount")!;
 const meetingCount = document.querySelector<HTMLElement>("#meetingCount")!;
 const mapStatus = document.querySelector<HTMLElement>("#mapStatus")!;
+const inputPanel = document.querySelector<HTMLElement>(".input-panel")!;
+const agentStepsHost = document.querySelector<HTMLElement>("#agentSteps")!;
 const chatMessagesHost = document.querySelector<HTMLElement>("#chatMessages")!;
 const chatForm = document.querySelector<HTMLFormElement>("#chatForm")!;
 const chatInput = document.querySelector<HTMLTextAreaElement>("#chatInput")!;
@@ -142,8 +164,10 @@ const mapView = createMapView(document.querySelector<HTMLElement>("#map")!);
 function applySavedPanelWidths() {
   const left = localStorage.getItem("pickup-route-left-panel-width");
   const right = localStorage.getItem("pickup-route-right-panel-width");
+  const chatHeight = localStorage.getItem("pickup-route-right-chat-height");
   if (left) workspace.style.setProperty("--left-panel-width", `${Number(left)}px`);
   if (right) workspace.style.setProperty("--right-panel-width", `${Number(right)}px`);
+  if (chatHeight) resultPanel.style.setProperty("--right-chat-height", `${Number(chatHeight)}px`);
 }
 
 function startResize(side: "left" | "right", event: PointerEvent) {
@@ -173,12 +197,34 @@ function startResize(side: "left" | "right", event: PointerEvent) {
   window.addEventListener("pointerup", onUp);
 }
 
+function startRightPanelResize(event: PointerEvent) {
+  if (window.matchMedia("(max-width: 1060px)").matches) return;
+  event.preventDefault();
+  const rect = resultPanel.getBoundingClientRect();
+  const min = 190;
+  const max = Math.max(230, rect.height - 210);
+  const onMove = (moveEvent: PointerEvent) => {
+    const height = Math.max(min, Math.min(max, rect.bottom - moveEvent.clientY));
+    resultPanel.style.setProperty("--right-chat-height", `${height}px`);
+    localStorage.setItem("pickup-route-right-chat-height", String(Math.round(height)));
+  };
+  const onUp = () => {
+    document.body.classList.remove("resizing-stack");
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+  };
+  document.body.classList.add("resizing-stack");
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
+}
+
 function persistAndPaint() {
   saveState(state);
   updateChrome();
   mapView.update(state);
   renderRouteResult(resultHost, state.routeResult, state.error, state.loading);
   renderChat();
+  applyFocusHighlight();
 }
 
 function updateChrome() {
@@ -198,13 +244,93 @@ function updateChrome() {
   }
 }
 
+function formatElapsed(seconds = 0) {
+  const min = Math.floor(seconds / 60);
+  const sec = seconds % 60;
+  return `${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
+
+function stopChatTicker() {
+  if (chatTickTimer !== null) {
+    window.clearInterval(chatTickTimer);
+    chatTickTimer = null;
+  }
+}
+
+function startChatTicker() {
+  stopChatTicker();
+  chatTickTimer = window.setInterval(() => {
+    let changed = false;
+    for (const message of chatMessages) {
+      if (message.streaming && message.startedAt) {
+        message.elapsedSec = Math.max(0, Math.floor((Date.now() - message.startedAt) / 1000));
+        changed = true;
+      }
+    }
+    if (changed) renderChat();
+  }, 1000);
+}
+
+function updateAssistantProgress(message: ChatMessage, status: string) {
+  message.status = status;
+  message.steps = [...(message.steps || []), status].slice(-4);
+  message.elapsedSec = message.startedAt ? Math.max(0, Math.floor((Date.now() - message.startedAt) / 1000)) : message.elapsedSec;
+  renderChat();
+}
+
+function normalizeRouteResponse(result: RoutePlanResponse): RoutePlanResponse {
+  return {
+    ...result,
+    alternatives: result.alternatives || [],
+    driverCandidates: result.driverCandidates || [],
+    driverRoutes: result.driverRoutes || (result.best ? [result.best] : []),
+    meetingRoutes: result.meetingRoutes || [],
+    executionTimeline: result.executionTimeline || [],
+    memberPlans: result.memberPlans || [],
+    planWarnings: result.planWarnings || []
+  };
+}
+
 function renderChat() {
+  agentStepsHost.innerHTML = "";
   chatMessagesHost.innerHTML = "";
   for (const message of chatMessages) {
     const bubble = document.createElement("div");
     bubble.className = `chat-message ${message.role}`;
+
+    if (message.role === "assistant" && (message.streaming || message.status)) {
+      const live = document.createElement("div");
+      live.className = message.streaming ? "chat-live-status active" : "chat-live-status";
+      const elapsed = message.elapsedSec ?? (message.startedAt ? Math.max(0, Math.floor((Date.now() - message.startedAt) / 1000)) : 0);
+      live.innerHTML = `
+        <span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        <strong>${message.streaming ? "思考中" : "已完成"}</strong>
+        <time>${formatElapsed(elapsed)}</time>
+      `;
+      bubble.append(live);
+
+      if (message.status) {
+        const status = document.createElement("div");
+        status.className = "chat-current-step";
+        status.textContent = message.status;
+        bubble.append(status);
+      }
+
+      if (message.steps?.length && message.streaming) {
+        const log = document.createElement("div");
+        log.className = "chat-step-log";
+        for (const step of message.steps.slice(-3)) {
+          const item = document.createElement("span");
+          item.textContent = step;
+          log.append(item);
+        }
+        bubble.append(log);
+      }
+    }
+
     const content = document.createElement("p");
-    content.textContent = message.content;
+    content.textContent =
+      message.content.trim() || (message.streaming ? "正在处理你的请求，路线计算完成后会在这里继续流式输出回答。" : "");
     bubble.append(content);
     if (message.source === "fallback") {
       const source = document.createElement("small");
@@ -213,7 +339,7 @@ function renderChat() {
     }
     if (message.source === "model") {
       const source = document.createElement("small");
-      source.textContent = "模型回复";
+      source.textContent = message.elapsedSec ? `模型回复，思考 ${formatElapsed(message.elapsedSec)}` : "模型回复";
       bubble.append(source);
     }
     chatMessagesHost.append(bubble);
@@ -240,7 +366,23 @@ function personIdByName(name?: string) {
   return state.people.find((person) => person.name === name)?.id || "";
 }
 
-function applyManifestPatch(patch: ManifestPatch) {
+function flashManifestUpdate() {
+  inputPanel.classList.add("ai-updated");
+  window.setTimeout(() => inputPanel.classList.remove("ai-updated"), 1600);
+}
+
+function applyFocusHighlight() {
+  document.querySelectorAll(".focus-highlight").forEach((element) => element.classList.remove("focus-highlight"));
+  if (focusPersonId) {
+    document.querySelector(`[data-person-id="${CSS.escape(focusPersonId)}"]`)?.classList.add("focus-highlight");
+    document.querySelector(`[data-person-plan-id="${CSS.escape(focusPersonId)}"]`)?.classList.add("focus-highlight");
+  }
+  if (focusStopId) {
+    document.querySelector(`[data-meeting-id="${CSS.escape(focusStopId)}"]`)?.classList.add("focus-highlight");
+  }
+}
+
+function applyManifestPatch(patch: ManifestPatch, options: { routeSyncPending?: boolean } = {}) {
   if (patch.city) {
     state.city = patch.city;
     cityInput.value = patch.city;
@@ -294,10 +436,16 @@ function applyManifestPatch(patch: ManifestPatch) {
   }
 
   state.routeResult = null;
+  if (options.routeSyncPending) {
+    state.loading = true;
+    state.error = null;
+  }
   renderDestination();
   renderPeople();
   renderMeetings();
   persistAndPaint();
+  flashManifestUpdate();
+  applyFocusHighlight();
 }
 
 function patchState(patch: Partial<AppState>) {
@@ -400,8 +548,7 @@ function renderMeetings() {
     onPatch: (id, patch) => {
       state.meetingPoints = state.meetingPoints.map((meeting) => (meeting.id === id ? { ...meeting, ...patch } : meeting));
       state.routeResult = null;
-      saveState(state);
-      mapView.update(state);
+      persistAndPaint();
     },
     onAddressSelect: (id, suggestion) => {
       state.meetingPoints = state.meetingPoints.map((meeting) =>
@@ -491,15 +638,28 @@ function buildRoutePayload() {
 }
 
 async function planRoute(mode: "manual" | "smart") {
-  const validationError = validateInput(mode);
-  if (validationError) {
-    patchState({ error: validationError, routeResult: null });
-    return;
-  }
-
-  patchState({ loading: true, error: null, routeResult: null });
+  lastPlanMode = mode;
   planButton.disabled = true;
   smartPlanButton.disabled = true;
+
+  try {
+    await syncRouteFromManifest(mode, { showLoading: true });
+  } finally {
+    planButton.disabled = false;
+    smartPlanButton.disabled = false;
+  }
+}
+
+async function syncRouteFromManifest(mode: "manual" | "smart", options: { showLoading?: boolean } = {}) {
+  const validationError = validateInput(mode);
+  if (validationError) {
+    patchState({ loading: false, error: validationError, routeResult: null });
+    return false;
+  }
+
+  if (options.showLoading) {
+    patchState({ loading: true, error: null, routeResult: null });
+  }
 
   try {
     const response = await fetch(mode === "smart" ? "/api/route/smart-plan" : "/api/route/plan", {
@@ -509,16 +669,15 @@ async function planRoute(mode: "manual" | "smart") {
     });
     const data = (await response.json()) as RoutePlanResponse | { error?: string };
     if (!response.ok) throw new Error("error" in data ? data.error || "路线规划失败" : "路线规划失败");
-    patchState({ loading: false, routeResult: data as RoutePlanResponse, error: null });
+    patchState({ loading: false, routeResult: normalizeRouteResponse(data as RoutePlanResponse), error: null });
+    return true;
   } catch (error) {
     patchState({
       loading: false,
       routeResult: null,
       error: error instanceof Error ? error.message : "路线规划失败"
     });
-  } finally {
-    planButton.disabled = false;
-    smartPlanButton.disabled = false;
+    return false;
   }
 }
 
@@ -542,9 +701,22 @@ function parseSseChunk(buffer: string, onEvent: (event: string, data: any) => vo
 }
 
 async function sendChatMessage(message: string) {
+  agentSteps = [];
+  let manifestChanged = false;
+  let routeFreshAfterManifest = false;
   chatMessages = [...chatMessages, { role: "user", content: message }];
-  const assistantMessage: ChatMessage = { role: "assistant", content: "", source: "model" };
+  const assistantMessage: ChatMessage = {
+    role: "assistant",
+    content: "",
+    source: "model",
+    streaming: true,
+    status: "正在理解你的指令",
+    startedAt: Date.now(),
+    elapsedSec: 0,
+    steps: ["正在理解你的指令"]
+  };
   chatMessages = [...chatMessages, assistantMessage];
+  startChatTicker();
   renderChat();
   chatInput.value = "";
   chatSendButton.disabled = true;
@@ -574,31 +746,54 @@ async function sendChatMessage(message: string) {
     let buffer = "";
     const handleEvent = (event: string, data: any) => {
       if (event === "token") {
+        if (!assistantMessage.content.trim()) assistantMessage.status = "正在流式输出回答";
         assistantMessage.content += data.content || "";
         renderChat();
       }
       if (event === "tool") {
-        assistantMessage.content += assistantMessage.content ? `\n${data.label || "正在调用工具"}` : data.label || "正在调用工具";
-        renderChat();
+        agentSteps = [...agentSteps, data.label || "正在调用工具"];
+        updateAssistantProgress(assistantMessage, data.label || "正在调用工具");
+      }
+      if (event === "agent_step") {
+        agentSteps = [...agentSteps, data.label || data.message || "正在处理规划"];
+        updateAssistantProgress(assistantMessage, data.label || data.message || "正在处理规划");
       }
       if (event === "manifest_patch") {
-        applyManifestPatch(data.patch || {});
-        assistantMessage.content += `\n已按对话更新左侧行程清单。`;
+        manifestChanged = true;
+        routeFreshAfterManifest = false;
+        updateAssistantProgress(assistantMessage, "已更新左侧行程清单");
+        applyManifestPatch(data.patch || {}, { routeSyncPending: true });
         renderChat();
       }
       if (event === "route_result") {
-        state.routeResult = data.routeResult as RoutePlanResponse;
+        routeFreshAfterManifest = true;
+        updateAssistantProgress(assistantMessage, "已生成路线，正在整理回答");
+        state.routeResult = normalizeRouteResponse(data.routeResult as RoutePlanResponse);
+        lastPlanMode = state.routeResult.source === "smart" ? "smart" : "manual";
         state.loading = false;
         state.error = null;
         persistAndPaint();
       }
+      if (event === "focus_entity") {
+        focusPersonId = data.personId || "";
+        focusStopId = data.stopId || "";
+        applyFocusHighlight();
+      }
       if (event === "done") {
+        assistantMessage.streaming = false;
+        assistantMessage.status = "处理完成";
+        assistantMessage.elapsedSec = assistantMessage.startedAt ? Math.max(0, Math.floor((Date.now() - assistantMessage.startedAt) / 1000)) : assistantMessage.elapsedSec;
         assistantMessage.source = data.source || "model";
+        stopChatTicker();
         renderChat();
       }
       if (event === "error") {
+        assistantMessage.streaming = false;
+        assistantMessage.status = "处理失败";
+        assistantMessage.elapsedSec = assistantMessage.startedAt ? Math.max(0, Math.floor((Date.now() - assistantMessage.startedAt) / 1000)) : assistantMessage.elapsedSec;
         assistantMessage.content += `\n${data.error || "对话失败"}`;
         assistantMessage.source = "fallback";
+        stopChatTicker();
         renderChat();
       }
     };
@@ -609,15 +804,31 @@ async function sendChatMessage(message: string) {
       buffer += decoder.decode(value, { stream: true });
       buffer = parseSseChunk(buffer, handleEvent);
     }
+    if (manifestChanged && !routeFreshAfterManifest) {
+      assistantMessage.streaming = true;
+      startChatTicker();
+      updateAssistantProgress(assistantMessage, "正在根据新清单同步右侧路线");
+      const syncMode: "manual" | "smart" = state.meetingPoints.length ? "manual" : lastPlanMode;
+      const synced = await syncRouteFromManifest(syncMode, { showLoading: true });
+      assistantMessage.streaming = false;
+      stopChatTicker();
+      updateAssistantProgress(assistantMessage, synced ? "右侧路线已同步" : "右侧路线需要补全信息后再生成");
+    }
     if (!assistantMessage.content.trim()) {
-      assistantMessage.content = "没有收到可用回复。";
-      assistantMessage.source = "fallback";
+      assistantMessage.content = assistantMessage.status === "处理完成" ? "处理完成，路线结果已更新到右侧。" : "没有收到可用回复。";
+      if (assistantMessage.status !== "处理完成") assistantMessage.source = "fallback";
       renderChat();
     }
   } catch (error) {
+    assistantMessage.streaming = false;
+    assistantMessage.status = "处理失败";
+    assistantMessage.elapsedSec = assistantMessage.startedAt ? Math.max(0, Math.floor((Date.now() - assistantMessage.startedAt) / 1000)) : assistantMessage.elapsedSec;
     assistantMessage.content = error instanceof Error ? error.message : "对话失败";
     assistantMessage.source = "fallback";
   } finally {
+    assistantMessage.streaming = false;
+    assistantMessage.elapsedSec = assistantMessage.startedAt ? Math.max(0, Math.floor((Date.now() - assistantMessage.startedAt) / 1000)) : assistantMessage.elapsedSec;
+    stopChatTicker();
     chatSendButton.disabled = false;
     planButton.disabled = false;
     smartPlanButton.disabled = false;
@@ -631,7 +842,8 @@ function requestSmartAiPlan() {
     patchState({ error: validationError, routeResult: null });
     return;
   }
-  sendChatMessage("请根据当前行程清单，AI生成规划，跳过手动集合点，使用高德API自动寻找最快集合路线。");
+  lastPlanMode = "smart";
+  sendChatMessage("请根据当前行程清单生成 AI 规划，跳过手动集合点。请比较逐个接人、单集合点、多集合点和混合接人，并把最终集合点写入左侧清单。");
 }
 
 cityInput.addEventListener("input", () => {
@@ -642,6 +854,7 @@ cityInput.addEventListener("input", () => {
 applySavedPanelWidths();
 leftResizeHandle.addEventListener("pointerdown", (event) => startResize("left", event));
 rightResizeHandle.addEventListener("pointerdown", (event) => startResize("right", event));
+rightSplitter.addEventListener("pointerdown", startRightPanelResize);
 planButton.addEventListener("click", () => planRoute("manual"));
 smartPlanButton.addEventListener("click", requestSmartAiPlan);
 chatForm.addEventListener("submit", (event) => {

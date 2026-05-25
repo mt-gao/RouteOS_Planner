@@ -151,6 +151,7 @@ function compactRoute(routeResult: any) {
   return {
     source: routeResult.source,
     mode: routeResult.mode,
+    planKind: routeResult.planKind,
     best: routeResult.best
       ? {
           driverName: routeResult.best.driverName,
@@ -166,6 +167,25 @@ function compactRoute(routeResult: any) {
         }
       : null,
     meetingRoutes: routeResult.meetingRoutes,
+    executionTimeline: (routeResult.executionTimeline || []).map((item: any) => ({
+      type: item.type,
+      driverName: item.driverName,
+      stopName: item.stopName,
+      arrivalOffsetMin: minutes(item.arrivalOffsetSec),
+      departOffsetMin: minutes(item.departOffsetSec),
+      boardingNames: item.boardingNames
+    })),
+    memberPlans: (routeResult.memberPlans || []).map((plan: any) => ({
+      personName: plan.personName,
+      pickupPointName: plan.pickupPointName,
+      assignedDriverName: plan.assignedDriverName,
+      mode: plan.suggestedMode,
+      travelMin: minutes(plan.travelDurationSec),
+      latestDepartureOffsetMin: minutes(plan.latestDepartureOffsetSec),
+      boardOffsetMin: minutes(plan.boardOffsetSec),
+      suggestion: plan.suggestion
+    })),
+    planWarnings: routeResult.planWarnings,
     smartAnalysis: routeResult.smartAnalysis
   };
 }
@@ -269,7 +289,7 @@ const tools = [
     type: "function",
     function: {
       name: "amap_generate_smart_plan",
-      description: "Generate an AMap-backed smart plan that ignores manual meeting points and finds a fast automatic meeting point.",
+      description: "Generate an AMap-backed smart plan that ignores manual meeting points and compares direct pickup, single meeting, multi meeting, and hybrid pickup plans.",
       parameters: {
         type: "object",
         properties: {
@@ -289,8 +309,11 @@ function buildSystemPrompt() {
     ROUTE_SKILL,
     "Current implementation notes:",
     "- The UI can apply `manifest_patch` events and `route_result` events.",
+    "- The UI can display `agent_step` events and `focus_entity` events.",
     "- If you call `amap_generate_smart_plan`, the UI will receive and display the route.",
-    "- For deadline questions, use routeResult.smartAnalysis.selectedMeeting.members duration data when available."
+    "- Smart plans may include planKind, executionTimeline, memberPlans and planWarnings.",
+    "- For deadline questions, use memberPlans and executionTimeline. Do not recalculate a timeline in prose.",
+    "- Keep chat answers short. Full tables belong to the UI result panel, not the chat bubble."
   ].join("\n\n");
 }
 
@@ -337,6 +360,59 @@ async function fallbackStream(input: RouteAgentInput, emit: EmitEvent) {
   }
 }
 
+function formatOffset(offsetSec: number) {
+  const min = minutes(offsetSec);
+  if (min < 0) return `T-${Math.abs(min)} 分钟`;
+  return `T+${min} 分钟`;
+}
+
+function parseClockMinutes(message: string) {
+  const match = message.match(/(\d{1,2})(?:[:：点])(\d{1,2})?/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = match[2] === undefined ? 0 : Number(match[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  return hour * 60 + minute;
+}
+
+function formatClock(totalMinutes: number) {
+  const normalized = ((totalMinutes % 1440) + 1440) % 1440;
+  const hour = Math.floor(normalized / 60);
+  const minute = normalized % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function deterministicTimingReply(input: RouteAgentInput) {
+  const route = input.routeResult as any;
+  const memberPlans = (route?.memberPlans || []) as any[];
+  if (!memberPlans.length) return null;
+  if (!/(几点|几时|最晚|下楼|出发|集合|到达|latest|depart|departure|leave|when|downstairs|arrival|arrive)/i.test(input.message)) return null;
+  const member = memberPlans.find((plan) => plan.personName && input.message.includes(plan.personName));
+  if (!member) return null;
+
+  const deadlineMin = parseClockMinutes(input.message);
+  const allBoardOffsetSec = Math.max(...memberPlans.map((plan) => Number(plan.boardOffsetSec || 0)));
+  const mode =
+    member.suggestedMode === "public_transit" ? "公共交通" : member.suggestedMode === "wait_at_origin" ? "原地等车" : "打车/接送";
+
+  if (deadlineMin !== null) {
+    const driverStartMin = deadlineMin - minutes(allBoardOffsetSec);
+    const latestDeparture = driverStartMin + minutes(member.latestDepartureOffsetSec || 0);
+    const boardTime = driverStartMin + minutes(member.boardOffsetSec || 0);
+    const action =
+      member.suggestedMode === "wait_at_origin"
+        ? `${member.personName}不用提前去集合点，在原地等车即可，司机预计 ${formatClock(boardTime)} 到。`
+        : `${member.personName}最晚 ${formatClock(latestDeparture)} 出发，按 ${mode} 去 ${member.pickupPointName}，预计 ${minutes(member.travelDurationSec || 0)} 分钟。`;
+    return `${action}\n计算口径：全员最晚 ${formatClock(deadlineMin)} 上车，司机完成接人节点在 ${formatOffset(allBoardOffsetSec)}，${member.personName} 的上车点是 ${member.pickupPointName}，上车时间约 ${formatClock(boardTime)}。`;
+  }
+
+  const action =
+    member.suggestedMode === "wait_at_origin"
+      ? `${member.personName}不用提前下楼去集合点，司机预计 ${formatOffset(member.boardOffsetSec || 0)} 到他的出发点。`
+      : `${member.personName}最晚 ${formatOffset(member.latestDepartureOffsetSec || 0)} 出发，按 ${mode} 到 ${member.pickupPointName}，耗时约 ${minutes(member.travelDurationSec || 0)} 分钟。`;
+  return `${action}\n依据：司机在 ${formatOffset(member.boardOffsetSec || 0)} 到达该上车点，路线时间来自当前高德规划结果。`;
+}
+
 async function executeTool(call: ToolCall, input: RouteAgentInput, amap: AmapClient, emit: EmitEvent) {
   const args = parseToolArguments(call);
   if (call.function.name === "amap_suggest_address") {
@@ -353,13 +429,37 @@ async function executeTool(call: ToolCall, input: RouteAgentInput, amap: AmapCli
 
   if (call.function.name === "amap_generate_smart_plan") {
     emit("tool", { name: "amap_generate_smart_plan", status: "running", label: "调用高德生成智能集合路线" });
+    emit("agent_step", { label: "正在比较逐个接人、单集合点、多集合点和混合接人" });
     const routeInput = routeInputsFromAppState(input.appState);
     const result = await planSmartRoute(amap, routeInput);
+    const generatedMeetings = (result as any).generatedMeetingPoints || [];
+    if (generatedMeetings.length) {
+      emit("manifest_patch", {
+        patch: {
+          clearMeetingPoints: true,
+          meetingPoints: generatedMeetings.map((meeting: any) => ({
+            id: meeting.id,
+            name: meeting.name,
+            address: meeting.address,
+            lng: meeting.location.lng,
+            lat: meeting.location.lat,
+            memberIds: meeting.memberIds,
+            assignedDriverId: meeting.assignedDriverId
+          })),
+          explanation: "AI 已按结构化规划写入集合点和成员分配。"
+        }
+      });
+    }
+    emit("agent_step", { label: "已校验司机到站时间和成员最晚出发时间" });
     emit("route_result", { routeResult: result });
     return {
       generated: true,
+      planKind: (result as any).planKind,
+      executionTimeline: (result as any).executionTimeline,
+      memberPlans: (result as any).memberPlans,
       summary: result.smartAnalysis?.summary,
       selectedMeeting: result.smartAnalysis?.selectedMeeting,
+      selectedMeetings: result.smartAnalysis?.selectedMeetings,
       topCandidates: result.smartAnalysis?.candidates?.slice(0, 4)
     };
   }
@@ -394,6 +494,19 @@ async function readStream(response: Response, emit: EmitEvent) {
 }
 
 export async function streamRouteAgent(input: RouteAgentInput, config: ModelConfig, amap: AmapClient, emit: EmitEvent) {
+  const deterministic = deterministicTimingReply(input);
+  if (deterministic) {
+    const route = input.routeResult as any;
+    const member = (route?.memberPlans || []).find((plan: any) => plan.personName && input.message.includes(plan.personName));
+    if (member) emit("focus_entity", { personId: member.personId, stopId: member.pickupPointId });
+    for (const char of deterministic) {
+      emit("token", { content: char });
+      await new Promise((resolve) => setTimeout(resolve, 8));
+    }
+    emit("done", { source: "model" });
+    return;
+  }
+
   if (!config.apiKey) {
     await fallbackStream(input, emit);
     emit("done", { source: "fallback" });
@@ -435,7 +548,7 @@ export async function streamRouteAgent(input: RouteAgentInput, config: ModelConf
   messages.push({
     role: "user",
     content:
-      "请根据以上工具结果给出用户可读的最终答复。若已生成路线，说明司机、集合点、总耗时、节省时间、每个人交通方式。若已更新清单，说明更新内容。若用户问截止时间，给出最晚出发时间和计算口径。"
+      "请根据以上工具结果给出用户可读的最终答复。聊天里只给结论和必要依据，不要重复完整路线表。若已生成路线，用 2 到 4 句说明方案类型、司机、集合点数量和关键风险。完整时间线、成员交通方式和备选方案由页面右侧展示。若用户问某个人几点出发，只回答该人的最晚出发时间、方式和计算口径。"
   });
   const stream = await deepseekChat(messages, config, { stream: true });
   await readStream(stream, emit);

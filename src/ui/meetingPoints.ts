@@ -45,6 +45,7 @@ export function renderMeetingPoints(host: HTMLElement, options: MeetingPointOpti
   for (const meeting of options.meetingPoints) {
     const card = document.createElement("article");
     card.className = meeting.selectedAddress && meeting.memberIds.length ? "meeting-card ready" : "meeting-card";
+    card.dataset.meetingId = meeting.id;
     card.addEventListener("dragover", (event) => {
       event.preventDefault();
       card.classList.add("drag-over");

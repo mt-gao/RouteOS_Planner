@@ -76,6 +76,48 @@ export type RoutePlan = {
   score: number;
 };
 
+export type PlanKind = "direct_pickup" | "single_meeting" | "multi_meeting" | "hybrid_pickup" | "multi_driver";
+
+export type ExecutionTimelineItem = {
+  type: "start" | "pickup" | "meeting" | "destination";
+  driverId: string;
+  driverName: string;
+  stopId: string;
+  stopName: string;
+  arrivalOffsetSec: number;
+  departOffsetSec: number;
+  driveDurationSec: number;
+  waitDurationSec: number;
+  distanceM: number;
+  boardingNames: string[];
+};
+
+export type MemberPlan = {
+  personId: string;
+  personName: string;
+  pickupPointId: string;
+  pickupPointName: string;
+  pickupPointKind: "origin" | "meeting";
+  assignedDriverId: string;
+  assignedDriverName: string;
+  suggestedMode: "taxi" | "public_transit" | "wait_at_origin";
+  travelDurationSec: number;
+  distanceM: number;
+  latestDepartureOffsetSec: number;
+  arrivalOffsetSec: number;
+  boardOffsetSec: number;
+  waitDurationSec: number;
+  suggestion: string;
+  transit?: TransitRouteDetail;
+};
+
+export type PlanWarning = {
+  level: "info" | "warning";
+  message: string;
+  personId?: string;
+  stopId?: string;
+};
+
 export type SmartMemberRoute = {
   personId: string;
   personName: string;
@@ -110,6 +152,7 @@ export type SmartRouteAnalysis = {
   baselineDriverName: string;
   baselineOrderNames: string[];
   selectedMeeting?: SmartRouteCandidate;
+  selectedMeetings?: SmartRouteCandidate[];
   candidates: SmartRouteCandidate[];
   summary: string;
   caveats: string[];
