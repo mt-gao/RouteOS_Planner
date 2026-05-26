@@ -1177,12 +1177,14 @@ select.text-input {
   line-height: 1.12;
   font-weight: 840;
   letter-spacing: 0;
+  overflow-wrap: anywhere;
 }
 
 .result-title small {
   color: oklch(39% 0.055 245);
   font-size: 13px;
   line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .share-route-row {
@@ -1203,6 +1205,7 @@ select.text-input {
   font-size: 12px;
   font-weight: 760;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .result-panel h3,
@@ -1214,6 +1217,7 @@ select.text-input {
 }
 
 .metric-grid {
+  min-width: 0;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
@@ -1252,6 +1256,7 @@ select.text-input {
   color: var(--ink);
   font-size: 17px;
   font-weight: 820;
+  overflow-wrap: anywhere;
 }
 
 .driver-route-block {
@@ -1275,6 +1280,7 @@ select.text-input {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--paper);
+  min-width: 0;
 }
 
 .sequence-list li::before {
@@ -1296,12 +1302,14 @@ select.text-input {
 .sequence-list strong {
   font-size: 14px;
   font-weight: 800;
+  overflow-wrap: anywhere;
 }
 
 .sequence-list span {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .why-box {
@@ -1339,6 +1347,7 @@ select.text-input {
   color: oklch(36% 0.04 245);
   font-size: 13px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .candidate-row {
@@ -1359,11 +1368,13 @@ select.text-input {
   color: var(--ink);
   font-size: 13px;
   font-weight: 800;
+  overflow-wrap: anywhere;
 }
 
 .candidate-row span {
   color: var(--muted);
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .route-chat-panel {
@@ -1663,6 +1674,12 @@ select.text-input {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
+}
+
+.member-plan-card > div > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .member-plan-card strong {
@@ -1683,6 +1700,7 @@ select.text-input {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .member-plan-card p {
@@ -1710,6 +1728,7 @@ select.text-input {
 }
 
 .alt-plan {
+  min-width: 0;
   display: grid;
   gap: 6px;
   padding: 10px;
@@ -1719,6 +1738,11 @@ select.text-input {
 .alt-plan strong {
   color: var(--ink);
   line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.alt-plan small {
+  overflow-wrap: anywhere;
 }
 
 .empty-result,
