@@ -8,3 +8,4 @@ dist
 *.err
 .vercel
 CLAUDE.md
+.claude/settings.local.json
