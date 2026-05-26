@@ -185,6 +185,69 @@
   padding-top: 20px;
 }
 
+.city-input-wrapper {
+  margin-top: 24px;
+}
+
+.city-input-group {
+  margin-bottom: 12px;
+}
+
+.city-input-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.city-input {
+  width: 100%;
+  height: 48px;
+  padding: 0 40px 0 16px;
+  border: 2px solid oklch(92% 0.008 238);
+  border-radius: 12px;
+  background: white;
+  font-size: 16px;
+  font-weight: 500;
+  color: oklch(22% 0.026 245);
+  transition: all 0.2s ease;
+}
+
+.city-input:focus {
+  outline: none;
+  border-color: oklch(53% 0.18 255);
+  background: oklch(53% 0.18 255 / 0.05);
+}
+
+.city-input::placeholder {
+  color: oklch(55% 0.012 245);
+  font-weight: 400;
+}
+
+.city-input-clear {
+  position: absolute;
+  right: 8px;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: oklch(94% 0.008 238);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: oklch(49% 0.035 245);
+  transition: all 0.2s ease;
+}
+
+.city-input-clear:hover {
+  background: oklch(90% 0.012 238);
+  color: oklch(22% 0.026 245);
+}
+
+.city-input-clear:active {
+  transform: scale(0.95);
+}
+
 .city-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -233,11 +296,10 @@
 
 .picker-highlight {
   position: absolute;
-  top: 50%;
+  top: 0;
   left: 0;
   right: 0;
   height: 60px;
-  transform: translateY(-50%);
   background: white;
   border-radius: 12px;
   pointer-events: none;
@@ -253,7 +315,6 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 120px 0;
   will-change: transform;
   transform: translateY(0);
   z-index: 2;
@@ -268,6 +329,11 @@
   font-weight: 600;
   color: oklch(49% 0.035 245);
   transition: all 0.3s ease;
+}
+
+.picker-item.picker-placeholder {
+  color: transparent;
+  pointer-events: none;
 }
 
 .picker-item.selected {
@@ -926,6 +992,11 @@
 @media (max-width: 480px) {
   .step-heading {
     font-size: 20px;
+  }
+
+  .city-input {
+    height: 44px;
+    font-size: 15px;
   }
 
   .city-grid {

@@ -19,13 +19,31 @@ export function createPeopleCountStep(config: { initialValue: number; onSelect: 
   const minPeople = 2;
   const maxPeople = 12;
   let selectedIndex = config.initialValue - minPeople;
+  const paddingCount = 2; // 上下各添加2个占位项
 
+  // 添加上方的占位项
+  for (let i = 0; i < paddingCount; i++) {
+    const placeholder = document.createElement("div");
+    placeholder.className = "picker-item picker-placeholder";
+    placeholder.textContent = "";
+    wheel.appendChild(placeholder);
+  }
+
+  // 添加实际可选的数字项
   for (let i = minPeople; i <= maxPeople; i++) {
     const item = document.createElement("div");
     item.className = "picker-item";
     item.textContent = String(i);
     item.dataset.value = String(i);
     wheel.appendChild(item);
+  }
+
+  // 添加下方的占位项
+  for (let i = 0; i < paddingCount; i++) {
+    const placeholder = document.createElement("div");
+    placeholder.className = "picker-item picker-placeholder";
+    placeholder.textContent = "";
+    wheel.appendChild(placeholder);
   }
 
   pickerContainer.appendChild(wheel);
@@ -38,16 +56,18 @@ export function createPeopleCountStep(config: { initialValue: number; onSelect: 
   function updateSelection() {
     const items = wheel.querySelectorAll(".picker-item");
     items.forEach((item, index) => {
-      if (index === selectedIndex) {
+      const actualIndex = index - paddingCount; // 调整索引（跳过占位项）
+      if (actualIndex === selectedIndex && !item.classList.contains("picker-placeholder")) {
         item.classList.add("selected");
       } else {
         item.classList.remove("selected");
       }
     });
 
-    // 滚动到选中项 - 向上滑动时需要向上移动 wheel（负值）
+    // 滚动到选中项 - 顶部对齐，不需要额外计算
     const itemHeight = 60;
-    wheel.style.transform = `translateY(${-selectedIndex * itemHeight}px)`;
+    const targetPosition = -(selectedIndex + paddingCount) * itemHeight;
+    wheel.style.transform = `translateY(${targetPosition}px)`;
 
     // 更新显示
     countDisplay.querySelector(".count-number")!.textContent = String(selectedIndex + minPeople);
@@ -69,15 +89,14 @@ export function createPeopleCountStep(config: { initialValue: number; onSelect: 
 
     if (animate) {
       wheel.style.transition = "transform 0.3s cubic-bezier(0.25, 0.1, 0.25, 1)";
+      updateSelection();
+      setTimeout(() => {
+        wheel.style.transition = "";
+      }, 300);
     } else {
       wheel.style.transition = "none";
+      updateSelection();
     }
-
-    updateSelection();
-
-    setTimeout(() => {
-      wheel.style.transition = "";
-    }, 300);
   }
 
   wheel.addEventListener("touchstart", (e) => {
@@ -110,7 +129,8 @@ export function createPeopleCountStep(config: { initialValue: number; onSelect: 
 
     const itemHeight = 60;
     const offset = currentY - startY;
-    const newOffset = -selectedIndex * itemHeight + offset;
+    const basePosition = -(selectedIndex + paddingCount) * itemHeight;
+    const newOffset = basePosition + offset;
 
     wheel.style.transform = `translateY(${newOffset}px)`;
   }, { passive: true });
@@ -121,14 +141,14 @@ export function createPeopleCountStep(config: { initialValue: number; onSelect: 
 
     const itemHeight = 60;
     const offset = currentY - startY;
-    const newIndex = Math.round(selectedIndex - offset / itemHeight);
+    const rawIndex = Math.round(selectedIndex - offset / itemHeight);
 
     // 惯性滚动
     if (Math.abs(velocity) > 0.5) {
       const momentumIndex = Math.round(selectedIndex - velocity * 10);
       scrollToIndex(momentumIndex);
     } else {
-      scrollToIndex(newIndex);
+      scrollToIndex(rawIndex);
     }
   }, { passive: true });
 
@@ -139,16 +159,17 @@ export function createPeopleCountStep(config: { initialValue: number; onSelect: 
     scrollToIndex(selectedIndex + delta);
   }, { passive: false });
 
-  // 点击选择
+  // 点击选择（忽略占位项）
   wheel.addEventListener("click", (e) => {
     const item = (e.target as HTMLElement).closest(".picker-item");
-    if (item) {
-      const index = Array.from(wheel.children).indexOf(item);
+    if (item && !item.classList.contains("picker-placeholder")) {
+      const index = Array.from(wheel.children).indexOf(item) - paddingCount;
       scrollToIndex(index);
     }
   });
 
-  // 初始化
+  // 初始化 - 顶部对齐，直接设置位置
+  wheel.style.transition = "none";
   updateSelection();
 
   return { element: container };
