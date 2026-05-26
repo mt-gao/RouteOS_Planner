@@ -491,14 +491,93 @@ function escapeRegExp(value: string) {
 
 function meetingPatchFromExplicitAssignments(input: RouteAgentInput): ManifestPatch | null {
   const people = (input.appState?.people || []).filter((person: any) => person?.name);
-  if (!people.length || !/(集合|会合|汇合)/.test(input.message)) return null;
+  if (!people.length) return null;
+  const message = input.message;
 
+  // Pattern 1: Generic "add N meeting points" (no specific assignment)
+  const genericAddMatch = message.match(/加(\d+|一|两|三|几|一个|两个|三个|几个)个?集合点/);
+  if (genericAddMatch) {
+    const countStr = genericAddMatch[1];
+    let count = 0;
+    if (countStr === "一" || countStr === "一个") count = 1;
+    else if (countStr === "两" || countStr === "两个") count = 2;
+    else if (countStr === "三" || countStr === "三个") count = 3;
+    else if (countStr === "几" || countStr === "几个") count = 2;
+    else count = parseInt(countStr) || 1;
+    count = Math.max(1, Math.min(count, 5));
+    const meetingPoints = [];
+    for (let i = 0; i < count; i++) {
+      meetingPoints.push({
+        id: `new-meeting-${Date.now()}-${i}`,
+        name: `新集合点 ${i + 1}`,
+        address: "",
+        lng: 0,
+        lat: 0,
+        memberIds: []
+      });
+    }
+    return {
+      meetingPoints,
+      explanation: `已添加 ${count} 个新集合点，请在左侧补充地址并分配成员。`
+    };
+  }
+
+  // Pattern 2: "给X和Y加一个集合点" or "给X和Y建一个集合点"
+  const namedMeetingMatch = message.match(/(?:给|为)?\s*(.+?)\s*(?:和|与|跟|、)\s*(.+?)\s*(?:加|创建|新建|建|增加|设)(?:一个|个|一个)?\s*集合点/);
+  if (namedMeetingMatch) {
+    const name1 = namedMeetingMatch[1].trim();
+    const name2 = namedMeetingMatch[2].trim();
+    const p1 = people.find((p: any) => p.name === name1 || p.name.includes(name1) || name1.includes(p.name));
+    const p2 = people.find((p: any) => p.name === name2 || p.name.includes(name2) || name2.includes(p.name));
+    if (p1 && p2) {
+      const meetingName = `${p1.name}${p2.name}集合点`;
+      const ids = [String(p1.id || p1.name), String(p2.id || p2.name)];
+      return {
+        clearMeetingPoints: true,
+        meetingPoints: [{
+          id: `meeting-${ids.join("-")}`,
+          name: meetingName,
+          address: "",
+          lng: 0,
+          lat: 0,
+          memberIds: ids
+        }],
+        explanation: `已为 ${p1.name} 和 ${p2.name} 创建集合点，请在左侧补充地址。`
+      };
+    }
+  }
+
+  // Pattern 3: "X和Y(在)(同一个)集合点" or "让X和Y在一个集合点"
+  const vagueMeetingMatch = message.match(/(?:让)?\s*(.+?)\s*(?:和|与|跟|、)\s*(.+?)\s*(?:在|同一个|一个|一起)\s*(?:集合点|集合|碰头|会合|汇合)/);
+  if (vagueMeetingMatch) {
+    const name1 = vagueMeetingMatch[1].trim();
+    const name2 = vagueMeetingMatch[2].trim();
+    const p1 = people.find((p: any) => p.name === name1 || p.name.includes(name1) || name1.includes(p.name));
+    const p2 = people.find((p: any) => p.name === name2 || p.name.includes(name2) || name2.includes(p.name));
+    if (p1 && p2) {
+      const ids = [String(p1.id || p1.name), String(p2.id || p2.name)];
+      return {
+        clearMeetingPoints: true,
+        meetingPoints: [{
+          id: `meeting-${ids.join("-")}`,
+          name: `${p2.name}处集合` || `${p1.name}${p2.name}集合点`,
+          address: p2.selectedAddress?.address || p2.addressInput || "",
+          lng: p2.selectedAddress?.lng || 0,
+          lat: p2.selectedAddress?.lat || 0,
+          memberIds: ids
+        }],
+        explanation: `已安排 ${p1.name} 和 ${p2.name} 在 ${p2.name} 附近集合。`
+      };
+    }
+  }
+
+  // Pattern 4: "让 X 去/到 Y (那/那里)集合" (original strict pattern)
   const groups = new Map<string, { target: any; memberIds: Set<string> }>();
   for (const subject of people) {
     for (const target of people) {
       if (subject.id === target.id) continue;
       const pattern = new RegExp(`(?:让)?\\s*${escapeRegExp(subject.name)}\\s*(?:去|到)\\s*${escapeRegExp(target.name)}(?:那|那里|家|处|附近)?\\s*(?:集合|会合|汇合)`);
-      if (!pattern.test(input.message)) continue;
+      if (!pattern.test(message)) continue;
       const targetPoint = personPoint(target);
       if (!targetPoint) continue;
       const group = groups.get(target.id) || { target, memberIds: new Set<string>() };
@@ -508,24 +587,26 @@ function meetingPatchFromExplicitAssignments(input: RouteAgentInput): ManifestPa
     }
   }
 
-  const meetingPoints = [...groups.values()].map(({ target, memberIds }) => {
-    const targetPoint = personPoint(target)!;
+  if (groups.size) {
+    const meetingPoints = [...groups.values()].map(({ target, memberIds }) => {
+      const targetPoint = personPoint(target)!;
+      return {
+        id: `meeting-at-${target.id || target.name}`,
+        name: `${target.name}集合点`,
+        address: targetPoint.address,
+        lng: targetPoint.lng,
+        lat: targetPoint.lat,
+        memberIds: [...memberIds]
+      };
+    });
     return {
-      id: `meeting-at-${target.id || target.name}`,
-      name: `${target.name}集合点`,
-      address: targetPoint.address,
-      lng: targetPoint.lng,
-      lat: targetPoint.lat,
-      memberIds: [...memberIds]
+      clearMeetingPoints: true,
+      meetingPoints,
+      explanation: "已按用户指定的成员集合关系重建集合点。"
     };
-  });
+  }
 
-  if (!meetingPoints.length) return null;
-  return {
-    clearMeetingPoints: true,
-    meetingPoints,
-    explanation: "已按用户指定的成员集合关系重建集合点。"
-  };
+  return null;
 }
 
 async function applyExplicitMeetingAssignments(input: RouteAgentInput, emit: EmitEvent) {
@@ -544,7 +625,12 @@ async function applyExplicitMeetingAssignments(input: RouteAgentInput, emit: Emi
 }
 
 function shouldAutoOptimizePlan(message: string) {
-  return /(重新AI优化|重新.?AI.?规划|AI.?优化|AI.?规划|自动.?规划|重新规划|重新生成|重排|更快|减少时间|优化一下|优化方案|换个方案)/.test(message);
+  // Do NOT auto-optimize if the user is making specific person/meeting assignments
+  if (/(集合|会合|汇合|碰头)/.test(message) && /(.+?)(?:和|与|跟|、)(.+?)/.test(message)) return false;
+  if (/(让|给|为)\s*(.+?)\s*(?:去|到|加|建|创建|增加|调)/.test(message)) return false;
+  if (/(甲|乙|丙|丁|他|她)/.test(message) && /(集合|碰头|去|到|加)/.test(message)) return false;
+  // Only auto-optimize when message is broadly about optimization without specifics
+  return /^(?:可以|帮我|请)?\s*(重新AI优化|重新.?AI.?规划|AI.?优化|AI.?规划|自动.?规划|重新规划|重新生成|优化一下|优化方案|换个方案)\s*[。.！!]?\s*$/.test(message.trim());
 }
 
 async function applyAutoOptimization(input: RouteAgentInput, amap: AmapClient, emit: EmitEvent) {

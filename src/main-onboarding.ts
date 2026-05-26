@@ -20,8 +20,9 @@ let state = loadState();
 let currentView: "result" | "map" = "result";
 let mapViewInstance: ReturnType<typeof createAMapView> | null = null;
 
-// 全局需求对话框实例
+// 全局需求对话框实例和聊天记录
 let requirementDialogInstance: ReturnType<typeof createRequirementDialog> | null = null;
+let requirementChatMessages: ChatMessage[] = [];
 
 async function readApiJson(response: Response) {
   const text = await response.text();
@@ -66,6 +67,8 @@ function formatElapsed(seconds = 0) {
 function createRequirementDialog(config: {
   onSubmit: (message: string) => Promise<void>;
   onClose: () => void;
+  initialMessages?: ChatMessage[];
+  onMessagesUpdate?: (messages: ChatMessage[]) => void;
 }) {
   const container = document.createElement("div");
   container.className = "requirement-dialog-overlay";
@@ -113,7 +116,7 @@ function createRequirementDialog(config: {
   const closeButton = dialog.querySelector<HTMLButtonElement>("#closeDialog")!;
   const suggestionChips = dialog.querySelectorAll<HTMLButtonElement>(".suggestion-chip");
 
-  let messages: ChatMessage[] = [];
+  let messages: ChatMessage[] = config.initialMessages ? [...config.initialMessages] : [];
   let chatTickTimer: number | null = null;
 
   function startChatTicker() {
@@ -142,6 +145,10 @@ function createRequirementDialog(config: {
     message.steps = [...(message.steps || []), status].slice(-4);
     message.elapsedSec = message.startedAt ? Math.max(0, Math.floor((Date.now() - message.startedAt) / 1000)) : message.elapsedSec;
     renderMessages();
+  }
+
+  function saveMessages() {
+    config.onMessagesUpdate?.([...messages]);
   }
 
   function renderMessages() {
@@ -208,6 +215,7 @@ function createRequirementDialog(config: {
       steps: ["正在理解你的指令"]
     };
     messages = [...messages, assistantMessage];
+    saveMessages();
 
     startChatTicker();
     renderMessages();
@@ -222,6 +230,7 @@ function createRequirementDialog(config: {
       assistantMessage.status = "处理失败";
       assistantMessage.content = error instanceof Error ? error.message : "对话失败";
       stopChatTicker();
+      saveMessages();
       renderMessages();
     } finally {
       chatInput.disabled = false;
@@ -239,16 +248,19 @@ function createRequirementDialog(config: {
         lastAssistant.elapsedSec = lastAssistant.startedAt ? Math.max(0, Math.floor((Date.now() - lastAssistant.startedAt) / 1000)) : 0;
         stopChatTicker();
       }
+      saveMessages();
       renderMessages();
     }
   }
 
-  // 添加初始欢迎消息
-  messages.push({
-    role: "assistant",
-    content: "你好！我是AI调度助手。你可以问我关于出发时间、集合点位置、绕路情况等问题。",
-    streaming: false
-  });
+  // 仅首次打开时添加欢迎消息
+  if (messages.length === 0) {
+    messages.push({
+      role: "assistant",
+      content: "你好！我是AI调度助手。你可以问我关于出发时间、集合点位置、绕路情况等问题。",
+      streaming: false
+    });
+  }
   renderMessages();
 
   // 事件监听
@@ -259,12 +271,6 @@ function createRequirementDialog(config: {
 
   closeButton.addEventListener("click", () => {
     config.onClose();
-  });
-
-  container.addEventListener("click", (e) => {
-    if (e.target === container) {
-      config.onClose();
-    }
   });
 
   suggestionChips.forEach(chip => {
@@ -322,7 +328,27 @@ function createResultView() {
   const main = document.createElement("main");
   main.className = "workspace result-workspace";
 
-  // 结果面板
+  // 地图背景（始终显示）
+  const mapSection = document.createElement("section");
+  mapSection.className = "map-panel-full";
+  const mapStage = document.createElement("div");
+  mapStage.className = "map-stage-full";
+  const mapContainer = document.createElement("div");
+  mapContainer.id = "map";
+  const mapLegend = document.createElement("div");
+  mapLegend.className = "map-legend";
+  mapLegend.setAttribute("aria-hidden", "true");
+  mapLegend.innerHTML = `
+    <span><i class="legend-dot driver"></i>司机</span>
+    <span><i class="legend-dot passenger"></i>乘客</span>
+    <span><i class="legend-dot meeting"></i>集合点</span>
+    <span><i class="legend-dot destination"></i>终点</span>
+  `;
+  mapStage.appendChild(mapContainer);
+  mapStage.appendChild(mapLegend);
+  mapSection.appendChild(mapStage);
+
+  // 结果面板（浮动在地图上）
   const resultPanel = document.createElement("aside");
   resultPanel.className = "result-panel-main";
   resultPanel.innerHTML = `
@@ -375,9 +401,15 @@ function createResultView() {
     </div>
   `;
 
+  // 地图在前，面板在后（z-index 控制）
+  main.appendChild(mapSection);
   main.appendChild(resultPanel);
   app.appendChild(header);
   app.appendChild(main);
+
+  // 初始化地图
+  const mapView = createAMapView(mapContainer);
+  mapViewInstance = mapView;
 
   // 获取DOM元素
   const peopleCount = header.querySelector("#peopleCount")!;
@@ -399,6 +431,9 @@ function createResultView() {
     peopleCount.textContent = `${state.people.length} 人`;
     driverCount.textContent = `${drivers} 车`;
     meetingCount.textContent = `${state.meetingPoints.length} 集合点`;
+
+    // 更新地图
+    mapView.update(state);
 
     // 更新查看地图按钮状态
     if (state.routeResult) {
@@ -466,6 +501,8 @@ function createResultView() {
 
       state.routeResult = data;
       state.error = null;
+      // 新路线生成，清空旧对话历史
+      requirementChatMessages = [];
     } catch (error) {
       state.error = error instanceof Error ? error.message : "路线规划失败";
       state.routeResult = null;
@@ -495,6 +532,10 @@ function createResultView() {
       onClose: () => {
         requirementDialogInstance?.element.remove();
         requirementDialogInstance = null;
+      },
+      initialMessages: requirementChatMessages,
+      onMessagesUpdate: (messages) => {
+        requirementChatMessages = messages;
       }
     });
 
@@ -538,6 +579,8 @@ function createResultView() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let manifestChanged = false;
+      let routeFresh = false;
 
       const handleEvent = (event: string, data: any) => {
         if (event === "token") {
@@ -550,11 +593,13 @@ function createResultView() {
           requirementDialogInstance?.updateAssistantMessage("", true, label);
         }
         if (event === "manifest_patch") {
+          manifestChanged = true;
           requirementDialogInstance?.updateAssistantMessage("", true, "已更新行程清单");
           // 应用manifest patch
           applyManifestPatch(data.patch || {});
         }
         if (event === "route_result") {
+          routeFresh = true;
           requirementDialogInstance?.updateAssistantMessage("", true, "已生成新路线");
           // 更新路线结果
           state.routeResult = normalizeRouteResponse(data.routeResult);
@@ -586,6 +631,36 @@ function createResultView() {
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         buffer = parseSseChunk(buffer, handleEvent);
+      }
+
+      // 如果清单已改但未收到路线结果，自动尝试同步
+      if (manifestChanged && !routeFresh) {
+        requirementDialogInstance?.updateAssistantMessage("", true, "正在根据新行程同步路线");
+        const syncMode: "manual" | "smart" = state.meetingPoints.length ? "manual" : "smart";
+        const validationError = validateInput(syncMode);
+        if (!validationError) {
+          try {
+            const payload = buildPayload();
+            const endpoint = syncMode === "smart" ? "/api/route/smart-plan" : "/api/route/plan";
+            const response = await fetch(endpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            const data = await readApiJson(response);
+            if (response.ok) {
+              const result = normalizeRouteResponse(data);
+              state.routeResult = result;
+              state.hasGeneratedRoute = true;
+              state.error = null;
+              saveState(state);
+              updateUI();
+              requirementDialogInstance?.updateAssistantMessage("路线已按新清单同步更新。", false, "处理完成");
+            }
+          } catch {
+            // sync failed silently — user can click generate manually
+          }
+        }
       }
 
     } catch (error) {
