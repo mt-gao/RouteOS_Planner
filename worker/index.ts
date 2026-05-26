@@ -23,6 +23,7 @@ type Env = {
   OPENAI_API_KEY?: string;
   OPENAI_BASE_URL?: string;
   OPENAI_MODEL?: string;
+  RUNTIME_NAME?: string;
 };
 
 const pointSchema = z.object({
@@ -324,7 +325,7 @@ async function handleApi(request: Request, env: Env, ctx: any) {
       status: "ok",
       hasAmapKey: Boolean(env.AMAP_KEY),
       hasModelKey: Boolean(modelConfig(env, requestBudget).apiKey),
-      runtime: "cloudflare-worker"
+      runtime: env.RUNTIME_NAME || "cloudflare-worker"
     });
   }
 

@@ -8,8 +8,10 @@
     "dev:client": "vite --host 127.0.0.1 --port 5173",
     "dev:server": "tsx watch server/index.ts",
     "dev:cf": "npm run build && npx wrangler dev",
+    "dev:vercel": "npx vercel dev",
     "build": "tsc --noEmit && vite build",
-    "deploy": "npm run build && npx wrangler deploy",
+    "deploy": "npm run build && npx vercel --prod",
+    "deploy:cf": "npm run build && npx wrangler deploy",
     "start": "node dist/server/index.js"
   },
   "dependencies": {

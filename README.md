@@ -16,10 +16,10 @@
 | 层 | 技术 |
 | --- | --- |
 | 前端 | TypeScript, Vite, 高德地图 JS API |
-| API 网关 | Cloudflare Workers |
+| API 网关 | Vercel Functions |
 | AI | DeepSeek API |
 | 地理/路线 | 高德 REST API |
-| 托管 | Vercel (前端), Cloudflare Workers (API) |
+| 托管 | Vercel (前端 + API) |
 
 ## 本地开发
 
@@ -34,7 +34,7 @@ cp .env.example .env.local
 # 启动开发服务器（前端 + 本地 API）
 npm run dev
 
-# 或者只用前端（API 走 Cloudflare Worker）
+# 或者只用前端（需要线上 Vercel API 可用）
 npm run dev:client
 ```
 
@@ -51,17 +51,20 @@ npm run dev:client
 
 ## 部署
 
-### 前端 + API
+### Vercel 前端 + API
 
 ```bash
-# Cloudflare Worker 部署
+# Vercel 生产部署
 npm run deploy
-
-# Vercel 前端（vercel.json 已配置）
-npx vercel --prod
 ```
 
-代码推送至 GitHub master 分支后，Vercel 会自动构建部署。
+代码推送至 GitHub master 分支后，Vercel 会自动构建部署。`/api/*` 由 Vercel Functions 处理，不再转发到 Cloudflare Worker。
+
+### Cloudflare Worker（可选备份）
+
+```bash
+npm run deploy:cf
+```
 
 ## 许可证
 
