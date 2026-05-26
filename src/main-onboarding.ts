@@ -371,7 +371,7 @@ function createResultView() {
   const peopleCount = header.querySelector("#peopleCount")!;
   const driverCount = header.querySelector("#driverCount")!;
   const meetingCount = header.querySelector("#meetingCount")!;
-  const resultHost = resultPanel.querySelector("#resultHost")!;
+  const resultHost = resultPanel.querySelector<HTMLElement>("#resultHost")!;
   const planButton = resultPanel.querySelector("#planButton")! as HTMLButtonElement;
   const smartPlanButton = resultPanel.querySelector("#smartPlanButton")! as HTMLButtonElement;
   const editInlineButton = resultPanel.querySelector("#editManifestInline")! as HTMLButtonElement;
@@ -815,12 +815,12 @@ function switchToResultView() {
 
 // 创建问答流程
 function showOnboarding() {
-  const existingApp = document.querySelector("#app");
+  const existingApp = document.querySelector<HTMLElement>("#app");
   if (existingApp) {
     existingApp.style.display = "none";
   }
 
-  let onboardingContainer = document.querySelector("#onboarding");
+  let onboardingContainer = document.querySelector<HTMLElement>("#onboarding");
   if (!onboardingContainer) {
     onboardingContainer = document.createElement("div");
     onboardingContainer.id = "onboarding";
@@ -842,7 +842,7 @@ function showOnboarding() {
         onboardingContainer.style.display = "none";
       }
 
-      const existingApp = document.querySelector("#app");
+      const existingApp = document.querySelector<HTMLElement>("#app");
       if (existingApp) {
         existingApp.style.display = "block";
       }

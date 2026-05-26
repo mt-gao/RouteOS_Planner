@@ -91,11 +91,11 @@ export function createPeopleDetailStep(config: {
       </div>
     `;
 
-    carGroup.querySelectorAll(".car-option").forEach(btn => {
+    carGroup.querySelectorAll<HTMLButtonElement>(".car-option").forEach(btn => {
       btn.addEventListener("click", () => {
         const hasCar = btn.dataset.car === "true";
         person.hasCar = hasCar;
-        carGroup.querySelectorAll(".car-option").forEach(b => b.classList.toggle("active", b.dataset.car === String(hasCar)));
+        carGroup.querySelectorAll<HTMLButtonElement>(".car-option").forEach(b => b.classList.toggle("active", b.dataset.car === String(hasCar)));
         config.onChange([...config.people]);
       });
     });
