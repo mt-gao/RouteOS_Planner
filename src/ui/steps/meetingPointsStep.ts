@@ -197,11 +197,21 @@ export function createMeetingPointsStep(config: {
     renderEmptyState();
   }
 
+  function updatePeople(newPeople: PersonState[]) {
+    config.people = newPeople;
+    // 清理无效的 memberIds
+    const validIds = new Set(config.people.map(p => p.id));
+    config.meetingPoints.forEach(meeting => {
+      meeting.memberIds = meeting.memberIds.filter(id => validIds.has(id));
+    });
+    renderEmptyState();
+  }
+
   container.appendChild(intro);
   container.appendChild(content);
 
   // 初始化
   renderEmptyState();
 
-  return { element: container };
+  return { element: container, updatePeople };
 }

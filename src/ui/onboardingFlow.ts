@@ -195,6 +195,14 @@ export function createOnboardingFlow() {
       if (id === currentStep.id) {
         element.classList.add("active");
         element.classList.remove("prev", "next");
+        // 切换到人员详情步骤时，更新人数
+        if (id === "peopleDetail") {
+          peopleDetailStep.updatePeople(state.people);
+        }
+        // 切换到集合点步骤时，更新人数
+        if (id === "meetingPoints") {
+          meetingPointsStep.updatePeople(state.people);
+        }
       } else if (stepElements.findIndex(s => s.id === id) < currentStepIndex) {
         element.classList.add("prev");
         element.classList.remove("active", "next");

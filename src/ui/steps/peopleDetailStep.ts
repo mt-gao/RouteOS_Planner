@@ -24,6 +24,16 @@ export function createPeopleDetailStep(config: {
 
   let currentIndex = 0;
 
+  function updatePeople(newPeople: PersonState[]) {
+    config.people = newPeople;
+    // 重置索引到有效范围
+    if (currentIndex >= config.people.length) {
+      currentIndex = Math.max(0, config.people.length - 1);
+    }
+    renderTabs();
+    renderForm();
+  }
+
   function renderTabs() {
     const tabsContainer = header.querySelector(".people-detail-tabs")!;
     tabsContainer.innerHTML = "";
@@ -230,6 +240,7 @@ export function createPeopleDetailStep(config: {
 
   return {
     element: container,
-    validate
+    validate,
+    updatePeople
   };
 }
