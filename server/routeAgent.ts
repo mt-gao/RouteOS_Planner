@@ -1,8 +1,8 @@
-import { AmapClient } from "./amapClient";
-import { planSmartRoute } from "./intelligentPlanner";
-import { claimExternalRequest, type ExternalRequestBudget } from "./requestBudget";
-import { withRouteShare } from "./routeShare";
-import type { DestinationInput, PersonInput, TimeConstraint } from "./types";
+import { AmapClient } from "./amapClient.js";
+import { planSmartRoute } from "./intelligentPlanner.js";
+import { claimExternalRequest, type ExternalRequestBudget } from "./requestBudget.js";
+import { withRouteShare } from "./routeShare.js";
+import type { DestinationInput, PersonInput, TimeConstraint } from "./types.js";
 
 type ModelConfig = {
   apiKey?: string;

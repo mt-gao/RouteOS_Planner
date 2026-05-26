@@ -1,4 +1,4 @@
-import { REQUEST_OVERLOAD_MESSAGE } from "./requestBudget";
+import { REQUEST_OVERLOAD_MESSAGE } from "./requestBudget.js";
 
 type ModelConfig = {
   apiKey?: string;

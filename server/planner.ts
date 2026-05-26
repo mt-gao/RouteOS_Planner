@@ -1,5 +1,5 @@
-import { scoreRoute } from "./scoring";
-import type { DestinationInput, MatrixResult, PersonInput, PickupStopInput, RoutePlan, RouteSegment } from "./types";
+import { scoreRoute } from "./scoring.js";
+import type { DestinationInput, MatrixResult, PersonInput, PickupStopInput, RoutePlan, RouteSegment } from "./types.js";
 
 type NodeInfo = {
   id: string;

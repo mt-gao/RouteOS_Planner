@@ -1,5 +1,5 @@
-import type { LocationPoint, MatrixResult, Point, RouteDetail, TransitRouteDetail } from "./types";
-import { claimExternalRequest, type ExternalRequestBudget } from "./requestBudget";
+import type { LocationPoint, MatrixResult, Point, RouteDetail, TransitRouteDetail } from "./types.js";
+import { claimExternalRequest, type ExternalRequestBudget } from "./requestBudget.js";
 
 type AmapPoi = {
   id?: string;

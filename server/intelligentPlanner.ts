@@ -1,5 +1,5 @@
-import { AmapClient } from "./amapClient";
-import { planPickupStops } from "./planner";
+import { AmapClient } from "./amapClient.js";
+import { planPickupStops } from "./planner.js";
 import type {
   DestinationInput,
   ExecutionTimelineItem,
@@ -17,7 +17,7 @@ import type {
   SmartRouteAnalysis,
   SmartRouteCandidate,
   TransitRouteDetail
-} from "./types";
+} from "./types.js";
 
 type SmartPlanInput = {
   people: PersonInput[];

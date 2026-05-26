@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import worker from "../worker/index";
+import worker from "../worker/index.js";
 
 type VercelRequest = IncomingMessage & {
   body?: unknown;

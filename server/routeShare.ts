@@ -1,4 +1,4 @@
-import type { DestinationInput, MeetingPointInput, MemberPlan, PersonInput, RoutePlan, TimeConstraint } from "./types";
+import type { DestinationInput, MeetingPointInput, MemberPlan, PersonInput, RoutePlan, TimeConstraint } from "./types.js";
 
 type RouteWithDetail = RoutePlan & { routeDetail?: unknown };
 
