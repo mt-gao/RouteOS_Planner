@@ -311,10 +311,10 @@ function createResultView() {
   header.className = "topbar";
   header.innerHTML = `
     <div class="brand-block">
-      <span class="brand-mark">接</span>
+      <img class="brand-mark" src="/logo1.png" alt="RouteOS">
       <div>
-        <h1>接人路线规划</h1>
-        <p>多人点位、司机分配、集合路线</p>
+        <h1>RouteOS</h1>
+        <p>路线规划与调度系统</p>
       </div>
     </div>
     <div class="topbar-status" aria-label="当前规划状态">
@@ -584,23 +584,28 @@ function createResultView() {
 
       const handleEvent = (event: string, data: any) => {
         if (event === "token") {
-          // 更新AI回复内容
-          const currentContent = requirementDialogInstance?.element.querySelector(".requirement-chat-message.assistant:last-child p")?.textContent || "";
+          // 从消息数组读取当前内容，不依赖 DOM
+          const lastAssistant = [...requirementChatMessages].reverse().find(m => m.role === "assistant");
+          const currentContent = lastAssistant?.content || "";
           requirementDialogInstance?.updateAssistantMessage(currentContent + (data.content || ""), true, "正在输出回答");
         }
         if (event === "tool" || event === "agent_step") {
           const label = data.label || data.message || "正在处理";
-          requirementDialogInstance?.updateAssistantMessage("", true, label);
+          // 只更新状态，不清除内容
+          const lastAssistant = [...requirementChatMessages].reverse().find(m => m.role === "assistant");
+          requirementDialogInstance?.updateAssistantMessage(lastAssistant?.content || "", true, label);
         }
         if (event === "manifest_patch") {
           manifestChanged = true;
-          requirementDialogInstance?.updateAssistantMessage("", true, "已更新行程清单");
+          const lastAssistant = [...requirementChatMessages].reverse().find(m => m.role === "assistant");
+          requirementDialogInstance?.updateAssistantMessage(lastAssistant?.content || "", true, "已更新行程清单");
           // 应用manifest patch
           applyManifestPatch(data.patch || {});
         }
         if (event === "route_result") {
           routeFresh = true;
-          requirementDialogInstance?.updateAssistantMessage("", true, "已生成新路线");
+          const lastAssistant = [...requirementChatMessages].reverse().find(m => m.role === "assistant");
+          requirementDialogInstance?.updateAssistantMessage(lastAssistant?.content || "", true, "已生成新路线");
           // 更新路线结果
           state.routeResult = normalizeRouteResponse(data.routeResult);
           state.hasGeneratedRoute = true;
@@ -610,16 +615,17 @@ function createResultView() {
           updateUI();
         }
         if (event === "done") {
+          const lastAssistant = [...requirementChatMessages].reverse().find(m => m.role === "assistant");
           requirementDialogInstance?.updateAssistantMessage(
-            requirementDialogInstance?.element.querySelector(".requirement-chat-message.assistant:last-child p")?.textContent || "处理完成",
+            lastAssistant?.content || "处理完成",
             false,
             "处理完成"
           );
         }
         if (event === "error") {
-          const currentContent = requirementDialogInstance?.element.querySelector(".requirement-chat-message.assistant:last-child p")?.textContent || "";
+          const lastAssistant = [...requirementChatMessages].reverse().find(m => m.role === "assistant");
           requirementDialogInstance?.updateAssistantMessage(
-            currentContent + `\n${data.error || "对话失败"}`,
+            (lastAssistant?.content || "") + `\n${data.error || "对话失败"}`,
             false,
             "处理失败"
           );
@@ -635,18 +641,23 @@ function createResultView() {
 
       // 如果清单已改但未收到路线结果，自动尝试同步
       if (manifestChanged && !routeFresh) {
-        requirementDialogInstance?.updateAssistantMessage("", true, "正在根据新行程同步路线");
-        const syncMode: "manual" | "smart" = state.meetingPoints.length ? "manual" : "smart";
-        const validationError = validateInput(syncMode);
+        // 保留 AI 原始回复内容，仅更新状态
+        const lastContent = requirementDialogInstance?.element.querySelector(".requirement-chat-message.assistant:last-child p")?.textContent || "";
+        // 集合点可选，空的或无地址的自动过滤，始终用 smart 模式规划
+        const validationError = validateInput("smart");
         if (!validationError) {
           try {
+            requirementDialogInstance?.updateAssistantMessage(lastContent, true, "正在根据新行程同步路线");
             const payload = buildPayload();
-            const endpoint = syncMode === "smart" ? "/api/route/smart-plan" : "/api/route/plan";
-            const response = await fetch(endpoint, {
+            const controller = new AbortController();
+            const timeout = window.setTimeout(() => controller.abort(), 30000);
+            const response = await fetch("/api/route/smart-plan", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload)
+              body: JSON.stringify(payload),
+              signal: controller.signal
             });
+            window.clearTimeout(timeout);
             const data = await readApiJson(response);
             if (response.ok) {
               const result = normalizeRouteResponse(data);
@@ -658,8 +669,10 @@ function createResultView() {
               requirementDialogInstance?.updateAssistantMessage("路线已按新清单同步更新。", false, "处理完成");
             }
           } catch {
-            // sync failed silently — user can click generate manually
+            requirementDialogInstance?.updateAssistantMessage(lastContent + "\n\n自动同步路线超时，请稍后手动点击生成。", false, "同步失败");
           }
+        } else {
+          requirementDialogInstance?.updateAssistantMessage(lastContent, false, "等待补充");
         }
       }
 
@@ -759,10 +772,7 @@ function createResultView() {
     if (!state.destination) return "请先确认终点坐标";
     const readyPeople = state.people.filter(p => p.name && p.selectedAddress);
     if (readyPeople.length !== state.people.length) return "请为每个人填写姓名并确认地址坐标";
-    if (mode === "manual") {
-      const readyMeetings = state.meetingPoints.filter(m => m.selectedAddress && m.memberIds.length);
-      if (readyMeetings.length !== state.meetingPoints.length) return "请为每个集合点确认地址，并至少拖入1位乘客";
-    }
+    // 集合点为可选，空的/无地址的集合点会在发请求时自动过滤掉
     if (!state.people.some(p => p.hasCar)) return "请至少勾选1位开车人员";
     return null;
   }
@@ -773,11 +783,11 @@ function createResultView() {
         id: p.id,
         name: p.name,
         address: p.selectedAddress?.address || p.addressInput,
-        location: { lng: p.selectedAddress!.lng, lat: p.selectedAddress!.lat },
+        location: p.selectedAddress ? { lng: p.selectedAddress.lng, lat: p.selectedAddress.lat } : undefined,
         hasCar: p.hasCar,
         note: p.note,
         assignedDriverId: p.assignedDriverId || undefined
-      })),
+      })).filter(p => p.location),
       city: state.city,
       destination: {
         name: state.destination!.name,
@@ -788,10 +798,10 @@ function createResultView() {
         id: m.id,
         name: m.name,
         address: m.selectedAddress?.address || m.addressInput,
-        location: { lng: m.selectedAddress!.lng, lat: m.selectedAddress!.lat },
+        location: m.selectedAddress ? { lng: m.selectedAddress.lng, lat: m.selectedAddress.lat } : undefined,
         memberIds: m.memberIds,
         assignedDriverId: m.assignedDriverId || undefined
-      })),
+      })).filter(m => m.location),
       timeConstraint: state.timeConstraint
     };
   }
@@ -916,24 +926,45 @@ function showOnboarding() {
 
   onboardingContainer.innerHTML = "";
   onboardingContainer.style.display = "block";
+  document.body.classList.add("has-onboarding");
 
   const flow = createOnboardingFlow();
   onboardingContainer.appendChild(flow.element);
 
+  // 保存当前路线结果，防止 onboarding 重置时丢失
+  const savedRouteResult = state.routeResult;
+  const savedChatMessages = requirementChatMessages;
+
+  function exitOnboarding() {
+    document.body.classList.remove("has-onboarding");
+    if (onboardingContainer) {
+      onboardingContainer.style.display = "none";
+    }
+    const existingApp = document.querySelector<HTMLElement>("#app");
+    if (existingApp) {
+      existingApp.style.display = "block";
+    }
+  }
+
+  flow.element.addEventListener("onboarding-close", () => {
+    // 不替换 state，直接退出
+    exitOnboarding();
+  });
+
   flow.element.addEventListener("onboarding-complete", (e: Event) => {
     const customEvent = e as CustomEvent<{ state: AppState }>;
     state = customEvent.detail.state;
+    // 恢复路线结果（saveState 不存 routeResult，onboarding 会丢失它）
+    if (!state.routeResult && savedRouteResult) {
+      state.routeResult = savedRouteResult;
+    }
+    // 恢复 AI 对话历史
+    if (!requirementChatMessages.length && savedChatMessages.length) {
+      requirementChatMessages = savedChatMessages;
+    }
 
     setTimeout(() => {
-      if (onboardingContainer) {
-        onboardingContainer.style.display = "none";
-      }
-
-      const existingApp = document.querySelector<HTMLElement>("#app");
-      if (existingApp) {
-        existingApp.style.display = "block";
-      }
-
+      exitOnboarding();
       initializeApp();
     }, 500);
   });

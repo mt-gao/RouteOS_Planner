@@ -12,12 +12,66 @@
   overflow: hidden;
 }
 
+@media (min-width: 768px) {
+  .onboarding-flow {
+    top: 50%;
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    transform: translate(-50%, -50%);
+    width: 640px;
+    max-width: 90vw;
+    max-height: 85vh;
+    border-radius: 16px;
+    box-shadow: 0 8px 32px oklch(18% 0.012 250 / 0.18);
+  }
+
+  /* 桌面端加半透明背景遮罩 */
+  .onboarding-flow::before {
+    display: none;
+  }
+
+  body.has-onboarding::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: oklch(18% 0.012 250 / 0.3);
+    z-index: 999;
+  }
+}
+
 /* 头部进度条 */
 .onboarding-header {
   flex-shrink: 0;
-  padding: 16px 20px;
+  padding: 12px 16px;
   background: oklch(98.7% 0.007 238);
   border-bottom: 1px solid oklch(92% 0.008 238);
+}
+
+.onboarding-head-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.onboarding-close {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: oklch(49% 0.035 245);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.onboarding-close:hover {
+  background: oklch(92% 0.008 238);
+  color: oklch(22% 0.026 245);
 }
 
 .onboarding-progress {
@@ -1258,6 +1312,9 @@
   height: 6px;
   background: currentColor;
   border-radius: 50%;
+}
+
+.requirement-chat-status.active .typing-dots i {
   animation: typingBounce 1.4s ease-in-out infinite;
 }
 

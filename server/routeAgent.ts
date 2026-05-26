@@ -494,32 +494,10 @@ function meetingPatchFromExplicitAssignments(input: RouteAgentInput): ManifestPa
   if (!people.length) return null;
   const message = input.message;
 
-  // Pattern 1: Generic "add N meeting points" (no specific assignment)
-  const genericAddMatch = message.match(/加(\d+|一|两|三|几|一个|两个|三个|几个)个?集合点/);
+  // Pattern 1: Generic "add N meeting points" — 不做硬编码分组，交给 LLM 用高德 API 按实际距离规划
+  const genericAddMatch = message.match(/(?:增加?|添加?|建)(\d+|一|两|三|几|一个|两个|三个|几个)个?集合点/);
   if (genericAddMatch) {
-    const countStr = genericAddMatch[1];
-    let count = 0;
-    if (countStr === "一" || countStr === "一个") count = 1;
-    else if (countStr === "两" || countStr === "两个") count = 2;
-    else if (countStr === "三" || countStr === "三个") count = 3;
-    else if (countStr === "几" || countStr === "几个") count = 2;
-    else count = parseInt(countStr) || 1;
-    count = Math.max(1, Math.min(count, 5));
-    const meetingPoints = [];
-    for (let i = 0; i < count; i++) {
-      meetingPoints.push({
-        id: `new-meeting-${Date.now()}-${i}`,
-        name: `新集合点 ${i + 1}`,
-        address: "",
-        lng: 0,
-        lat: 0,
-        memberIds: []
-      });
-    }
-    return {
-      meetingPoints,
-      explanation: `已添加 ${count} 个新集合点，请在左侧补充地址并分配成员。`
-    };
+    return null;
   }
 
   // Pattern 2: "给X和Y加一个集合点" or "给X和Y建一个集合点"

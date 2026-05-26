@@ -31,16 +31,29 @@ export function createOnboardingFlow() {
   const header = document.createElement("header");
   header.className = "onboarding-header";
   header.innerHTML = `
-    <div class="onboarding-progress">
-      <div class="progress-bar">
-        <div class="progress-fill" style="width: 0%"></div>
-      </div>
-      <div class="step-indicator">
-        <span class="current-step">1</span>
-        <span class="total-steps">/ ${STEPS.length - 1}</span>
+    <div class="onboarding-head-row">
+      <button class="onboarding-close" aria-label="关闭" type="button">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M18 6L6 18M6 6l12 12"/>
+        </svg>
+      </button>
+      <div class="onboarding-progress">
+        <div class="progress-bar">
+          <div class="progress-fill" style="width: 0%"></div>
+        </div>
+        <div class="step-indicator">
+          <span class="current-step">1</span>
+          <span class="total-steps">/ ${STEPS.length - 1}</span>
+        </div>
       </div>
     </div>
   `;
+
+  // 关闭按钮
+  const closeButton = header.querySelector<HTMLButtonElement>(".onboarding-close")!;
+  closeButton.addEventListener("click", () => {
+    container.dispatchEvent(new CustomEvent("onboarding-close"));
+  });
 
   // 导航栏（返回/下一步按钮）
   const nav = document.createElement("nav");
