@@ -3,6 +3,7 @@ import { AmapClient } from "../server/amapClient";
 import { replyToRouteChat } from "../server/chatAssistant";
 import { planSmartRoute } from "../server/intelligentPlanner";
 import { planPickupRoutes, planPickupStops } from "../server/planner";
+import { createExternalRequestBudget, toChatErrorMessage, toPublicErrorMessage, type ExternalRequestBudget } from "../server/requestBudget";
 import { streamRouteAgent } from "../server/routeAgent";
 import { withRouteShare } from "../server/routeShare";
 import type { DestinationInput, MeetingPointInput, PersonInput, PickupStopInput, TimeConstraint } from "../server/types";
@@ -81,18 +82,23 @@ async function readJson(request: Request) {
   }
 }
 
-function modelConfig(env: Env) {
+function modelConfig(env: Env, requestBudget?: ExternalRequestBudget) {
   return {
     apiKey: env.MODEL_API_KEY || env.DEEPSEEK_API_KEY || env.OPENAI_API_KEY,
     baseUrl: env.MODEL_BASE_URL || env.DEEPSEEK_BASE_URL || env.OPENAI_BASE_URL || "https://api.deepseek.com",
     model: env.MODEL_NAME || env.DEEPSEEK_MODEL || env.OPENAI_MODEL || "deepseek-v4-flash",
-    reasoningEffort: env.DEEPSEEK_REASONING_EFFORT || "max"
+    reasoningEffort: env.DEEPSEEK_REASONING_EFFORT || "max",
+    requestBudget,
+    maxToolRounds: 2
   };
 }
 
-function amapClient(env: Env) {
+function amapClient(env: Env, requestBudget?: ExternalRequestBudget) {
   if (!env.AMAP_KEY) throw new Error("AMAP_KEY is required");
-  return new AmapClient(env.AMAP_KEY, env.AMAP_JS_KEY || env.AMAP_KEY, env.AMAP_SECURITY_JS_CODE);
+  return new AmapClient(env.AMAP_KEY, env.AMAP_JS_KEY || env.AMAP_KEY, env.AMAP_SECURITY_JS_CODE, {
+    requestBudget,
+    maxRetries: 0
+  });
 }
 
 async function routePlan(request: Request, amap: AmapClient) {
@@ -264,7 +270,7 @@ function methodNotAllowed() {
   return json({ error: "Method not allowed" }, { status: 405 });
 }
 
-async function chatStream(request: Request, env: Env, amap: AmapClient, ctx: any) {
+async function chatStream(request: Request, env: Env, amap: AmapClient, ctx: any, requestBudget?: ExternalRequestBudget) {
   const body = z
     .object({
       message: z.string().trim().min(1),
@@ -286,12 +292,12 @@ async function chatStream(request: Request, env: Env, amap: AmapClient, ctx: any
       try {
         await streamRouteAgent(
           { message: body.message, appState: body.appState, routeResult: body.routeResult, history: body.history },
-          modelConfig(env),
+          modelConfig(env, requestBudget),
           amap,
           write
         );
       } catch (error) {
-        write("error", { error: error instanceof Error ? error.message : "未知错误" });
+        write("error", { error: toChatErrorMessage(error) });
       } finally {
         await writer.close();
       }
@@ -310,10 +316,16 @@ async function chatStream(request: Request, env: Env, amap: AmapClient, ctx: any
 
 async function handleApi(request: Request, env: Env, ctx: any) {
   const url = new URL(request.url);
-  const amap = amapClient(env);
+  const requestBudget = createExternalRequestBudget(45);
+  const amap = amapClient(env, requestBudget);
 
   if (url.pathname === "/api/health" && request.method === "GET") {
-    return json({ status: "ok", hasAmapKey: Boolean(env.AMAP_KEY), hasModelKey: Boolean(modelConfig(env).apiKey), runtime: "cloudflare-worker" });
+    return json({
+      status: "ok",
+      hasAmapKey: Boolean(env.AMAP_KEY),
+      hasModelKey: Boolean(modelConfig(env, requestBudget).apiKey),
+      runtime: "cloudflare-worker"
+    });
   }
 
   if (url.pathname === "/api/city-suggest" && request.method === "GET") {
@@ -391,12 +403,12 @@ async function handleApi(request: Request, env: Env, ctx: any) {
         routeResult: z.unknown().optional()
       })
       .parse(await readJson(request));
-    return json(await replyToRouteChat({ message: body.message, routeResult: body.routeResult }, modelConfig(env)));
+    return json(await replyToRouteChat({ message: body.message, routeResult: body.routeResult }, modelConfig(env, requestBudget)));
   }
 
   if (url.pathname === "/api/route/chat-stream") {
     if (request.method !== "POST") return methodNotAllowed();
-    return chatStream(request, env, amap, ctx);
+    return chatStream(request, env, amap, ctx, requestBudget);
   }
 
   return json({ error: "Not found" }, { status: 404 });
@@ -410,7 +422,7 @@ export default {
       try {
         return await handleApi(request, env, ctx);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "未知错误";
+        const message = toPublicErrorMessage(error);
         return json({ error: message }, { status: 400 });
       }
     }

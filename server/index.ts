@@ -5,12 +5,13 @@ import { replyToRouteChat } from "./chatAssistant";
 import { env } from "./env";
 import { planSmartRoute } from "./intelligentPlanner";
 import { planPickupRoutes, planPickupStops } from "./planner";
+import { toChatErrorMessage, toPublicErrorMessage } from "./requestBudget";
 import { streamRouteAgent } from "./routeAgent";
 import { withRouteShare } from "./routeShare";
 import type { DestinationInput, MeetingPointInput, PersonInput, PickupStopInput, TimeConstraint } from "./types";
 
 const app = express();
-const amap = new AmapClient(env.AMAP_KEY, env.AMAP_JS_KEY || env.AMAP_KEY, env.AMAP_SECURITY_JS_CODE);
+const amap = new AmapClient(env.AMAP_KEY, env.AMAP_JS_KEY || env.AMAP_KEY, env.AMAP_SECURITY_JS_CODE, { maxRetries: 1 });
 
 const pointSchema = z.object({
   lng: z.number(),
@@ -370,7 +371,7 @@ app.post("/api/route/chat-stream", async (req, res, next) => {
   } catch (error) {
     if (res.headersSent) {
       res.write(`event: error\n`);
-      res.write(`data: ${JSON.stringify({ error: error instanceof Error ? error.message : "未知错误" })}\n\n`);
+      res.write(`data: ${JSON.stringify({ error: toChatErrorMessage(error) })}\n\n`);
       res.end();
       return;
     }
@@ -379,7 +380,7 @@ app.post("/api/route/chat-stream", async (req, res, next) => {
 });
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  const message = error instanceof Error ? error.message : "未知错误";
+  const message = toPublicErrorMessage(error);
   res.status(400).json({ error: message });
 });
 

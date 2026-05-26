@@ -1,5 +1,6 @@
 import { AmapClient } from "./amapClient";
 import { planSmartRoute } from "./intelligentPlanner";
+import { claimExternalRequest, type ExternalRequestBudget } from "./requestBudget";
 import { withRouteShare } from "./routeShare";
 import type { DestinationInput, PersonInput, TimeConstraint } from "./types";
 
@@ -8,6 +9,8 @@ type ModelConfig = {
   baseUrl?: string;
   model?: string;
   reasoningEffort?: "high" | "max";
+  requestBudget?: ExternalRequestBudget;
+  maxToolRounds?: number;
 };
 
 type ChatMessage = {
@@ -363,6 +366,8 @@ function buildSystemPrompt() {
     "- Route results may include shareText and timePlan for copying a concise WeChat-ready route notice.",
     "- If the user states a concrete departure or arrival time, update_manifest with timeConstraint so the UI and copied summary use absolute clock times.",
     "- If the user says to delay/advance by a relative offset (e.g. 推迟/提前/延后 X 小时/分钟), calculate the new absolute time from the current timeConstraint in the manifest and update_manifest with the result.",
+    "- If the user asks to modify the plan or says one member should go to another member's place to gather, treat it as a manifest change. Call update_manifest with meetingPoints. Do not answer with timing-only text.",
+    "- For user-specified meeting assignments, preserve the user's assignment and let the UI re-run the manual route. Do not replace it with a fresh smart plan unless the user explicitly asks for automatic optimization.",
     "- For deadline questions, use memberPlans and executionTimeline. Do not recalculate a timeline in prose.",
     "- Keep chat answers short. Full tables belong to the UI result panel, not the chat bubble."
   ].join("\n\n");
@@ -370,6 +375,7 @@ function buildSystemPrompt() {
 
 async function deepseekChat(messages: any[], config: ModelConfig, options: { stream: boolean; tools?: unknown }) {
   const baseUrl = (config.baseUrl || "https://api.deepseek.com").replace(/\/$/, "");
+  claimExternalRequest(config.requestBudget);
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
@@ -437,7 +443,8 @@ function deterministicTimingReply(input: RouteAgentInput) {
   const route = input.routeResult as any;
   const memberPlans = (route?.memberPlans || []) as any[];
   if (!memberPlans.length) return null;
-  if (!/(几点|几时|最晚|下楼|出发|集合|到达|latest|depart|departure|leave|when|downstairs|arrival|arrive)/i.test(input.message)) return null;
+  if (isManifestChangeIntent(input.message)) return null;
+  if (!/(几点|几时|最晚|下楼|出发|到达|latest|depart|departure|leave|when|downstairs|arrival|arrive)/i.test(input.message)) return null;
   const member = memberPlans.find((plan) => plan.personName && input.message.includes(plan.personName));
   if (!member) return null;
 
@@ -462,6 +469,122 @@ function deterministicTimingReply(input: RouteAgentInput) {
       ? `${member.personName}不用提前下楼去集合点，司机预计 ${formatOffset(member.boardOffsetSec || 0)} 到他的出发点。`
       : `${member.personName}最晚 ${formatOffset(member.latestDepartureOffsetSec || 0)} 出发，按 ${mode} 到 ${member.pickupPointName}，耗时约 ${minutes(member.travelDurationSec || 0)} 分钟。`;
   return `${action}\n依据：司机在 ${formatOffset(member.boardOffsetSec || 0)} 到达该上车点，路线时间来自当前高德规划结果。`;
+}
+
+function isManifestChangeIntent(message: string) {
+  return /(修改|调整|改成|改一下|重新安排|重排|换成|改为|分配|安排|让|移到|加入|去.*集合|减少时间|更快|优化)/.test(message);
+}
+
+function personPoint(person: any) {
+  const point = pointFromSuggestion(person.selectedAddress) || pointFromSuggestion(person.location) || pointFromSuggestion(person);
+  if (!point) return null;
+  return {
+    lng: point.lng,
+    lat: point.lat,
+    address: String(person.selectedAddress?.address || person.addressInput || person.address || person.name || "集合点")
+  };
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function meetingPatchFromExplicitAssignments(input: RouteAgentInput): ManifestPatch | null {
+  const people = (input.appState?.people || []).filter((person: any) => person?.name);
+  if (!people.length || !/(集合|会合|汇合)/.test(input.message)) return null;
+
+  const groups = new Map<string, { target: any; memberIds: Set<string> }>();
+  for (const subject of people) {
+    for (const target of people) {
+      if (subject.id === target.id) continue;
+      const pattern = new RegExp(`(?:让)?\\s*${escapeRegExp(subject.name)}\\s*(?:去|到)\\s*${escapeRegExp(target.name)}(?:那|那里|家|处|附近)?\\s*(?:集合|会合|汇合)`);
+      if (!pattern.test(input.message)) continue;
+      const targetPoint = personPoint(target);
+      if (!targetPoint) continue;
+      const group = groups.get(target.id) || { target, memberIds: new Set<string>() };
+      group.memberIds.add(String(subject.id || subject.name));
+      if (!target.hasCar) group.memberIds.add(String(target.id || target.name));
+      groups.set(target.id, group);
+    }
+  }
+
+  const meetingPoints = [...groups.values()].map(({ target, memberIds }) => {
+    const targetPoint = personPoint(target)!;
+    return {
+      id: `meeting-at-${target.id || target.name}`,
+      name: `${target.name}集合点`,
+      address: targetPoint.address,
+      lng: targetPoint.lng,
+      lat: targetPoint.lat,
+      memberIds: [...memberIds]
+    };
+  });
+
+  if (!meetingPoints.length) return null;
+  return {
+    clearMeetingPoints: true,
+    meetingPoints,
+    explanation: "已按用户指定的成员集合关系重建集合点。"
+  };
+}
+
+async function applyExplicitMeetingAssignments(input: RouteAgentInput, emit: EmitEvent) {
+  const patch = meetingPatchFromExplicitAssignments(input);
+  if (!patch) return false;
+  emit("manifest_patch", { patch });
+  emit("agent_step", { label: "已按指定成员重建集合点，正在同步右侧路线" });
+  const names = patch.meetingPoints?.map((meeting) => meeting.name).join("、") || "集合点";
+  const text = `已按你的要求调整集合点：${names}。右侧会按新的左侧清单重新生成路线，用来比较是否更省时间。`;
+  for (const char of text) {
+    emit("token", { content: char });
+    await new Promise((resolve) => setTimeout(resolve, 8));
+  }
+  emit("done", { source: "model" });
+  return true;
+}
+
+function shouldAutoOptimizePlan(message: string) {
+  return /(重新AI优化|重新.?AI.?规划|AI.?优化|AI.?规划|自动.?规划|重新规划|重新生成|重排|更快|减少时间|优化一下|优化方案|换个方案)/.test(message);
+}
+
+async function applyAutoOptimization(input: RouteAgentInput, amap: AmapClient, emit: EmitEvent) {
+  if (!shouldAutoOptimizePlan(input.message)) return false;
+  emit("tool", { name: "amap_generate_smart_plan", status: "running", label: "调用高德重新生成智能路线" });
+  emit("agent_step", { label: "正在按当前左侧清单比较逐个接人、集合点和混合接人" });
+  const routeInput = routeInputsFromAppState(input.appState);
+  const result = withRouteShare(await planSmartRoute(amap, routeInput), {
+    people: routeInput.people,
+    destination: routeInput.destination,
+    timeConstraint: routeInput.timeConstraint
+  });
+  const generatedMeetings = (result as any).generatedMeetingPoints || [];
+  if (generatedMeetings.length) {
+    emit("manifest_patch", {
+      patch: {
+        clearMeetingPoints: true,
+        meetingPoints: generatedMeetings.map((meeting: any) => ({
+          id: meeting.id,
+          name: meeting.name,
+          address: meeting.address,
+          lng: meeting.location.lng,
+          lat: meeting.location.lat,
+          memberIds: meeting.memberIds,
+          assignedDriverId: meeting.assignedDriverId
+        })),
+        explanation: "AI 已重新优化集合点和成员分配。"
+      }
+    });
+  }
+  emit("agent_step", { label: "已生成新路线并同步右侧结果" });
+  emit("route_result", { routeResult: result });
+  const summary = result.smartAnalysis?.summary || "已按当前清单重新生成路线。";
+  const text = `${summary} 我已经把新的集合点写入左侧，并把完整时间线同步到右侧。`;
+  for (const char of text) {
+    emit("token", { content: char });
+    await new Promise((resolve) => setTimeout(resolve, 8));
+  }
+  emit("done", { source: "model" });
+  return true;
 }
 
 async function executeTool(call: ToolCall, input: RouteAgentInput, amap: AmapClient, emit: EmitEvent) {
@@ -549,6 +672,9 @@ async function readStream(response: Response, emit: EmitEvent) {
 }
 
 export async function streamRouteAgent(input: RouteAgentInput, config: ModelConfig, amap: AmapClient, emit: EmitEvent) {
+  if (await applyExplicitMeetingAssignments(input, emit)) return;
+  if (await applyAutoOptimization(input, amap, emit)) return;
+
   const deterministic = deterministicTimingReply(input);
   if (deterministic) {
     const route = input.routeResult as any;
@@ -581,7 +707,9 @@ export async function streamRouteAgent(input: RouteAgentInput, config: ModelConf
     }
   ];
 
-  for (let round = 0; round < 4; round += 1) {
+  const maxToolRounds = Math.max(1, Math.min(config.maxToolRounds ?? 2, 2));
+  const maxToolCallsPerRound = 2;
+  for (let round = 0; round < maxToolRounds; round += 1) {
     const response = await deepseekChat(messages, config, { stream: false, tools });
     const data = (await response.json()) as { choices?: Array<{ message?: any }> };
     const message = data.choices?.[0]?.message;
@@ -590,8 +718,11 @@ export async function streamRouteAgent(input: RouteAgentInput, config: ModelConf
     const toolCalls = (message.tool_calls || []) as ToolCall[];
     if (!toolCalls.length) break;
 
-    for (const call of toolCalls) {
-      const result = await executeTool(call, input, amap, emit);
+    for (const [index, call] of toolCalls.entries()) {
+      const result =
+        index < maxToolCallsPerRound
+          ? await executeTool(call, input, amap, emit)
+          : { skipped: true, reason: "Too many tool calls in one response; ask the user to narrow the request." };
       messages.push({
         role: "tool",
         tool_call_id: call.id,

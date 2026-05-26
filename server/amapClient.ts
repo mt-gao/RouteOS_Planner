@@ -1,4 +1,5 @@
 import type { LocationPoint, MatrixResult, Point, RouteDetail, TransitRouteDetail } from "./types";
+import { claimExternalRequest, type ExternalRequestBudget } from "./requestBudget";
 
 type AmapPoi = {
   id?: string;
@@ -43,6 +44,11 @@ const QPS_LIMIT_ERROR = "CUQPS_HAS_EXCEEDED_THE_LIMIT";
 const AMAP_REST_MIN_INTERVAL_MS = 360;
 let lastRestRequestAt = 0;
 
+export type AmapClientOptions = {
+  requestBudget?: ExternalRequestBudget;
+  maxRetries?: number;
+};
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -66,7 +72,9 @@ function stringifyAddress(address: AmapPoi["address"]) {
   return typeof address === "string" ? address : "";
 }
 
-async function fetchJson<T>(url: URL, retries = 2): Promise<T> {
+async function fetchJson<T>(url: URL, retries = 2, options: AmapClientOptions = {}): Promise<T> {
+  const retryBudget = Math.max(0, Math.min(retries, options.maxRetries ?? retries));
+  claimExternalRequest(options.requestBudget);
   await waitForRestBudget();
   const response = await fetch(url);
   if (!response.ok) {
@@ -75,9 +83,9 @@ async function fetchJson<T>(url: URL, retries = 2): Promise<T> {
   const data = (await response.json()) as T & { status?: string; info?: string; infocode?: string };
   if (data.status && data.status !== "1") {
     const message = `${data.info || ""}${data.infocode || ""}`;
-    if (retries > 0 && message.includes(QPS_LIMIT_ERROR)) {
-      await sleep((3 - retries) * 700);
-      return fetchJson<T>(url, retries - 1);
+    if (retryBudget > 0 && message.includes(QPS_LIMIT_ERROR)) {
+      await sleep((3 - retryBudget) * 700);
+      return fetchJson<T>(url, retryBudget - 1, options);
     }
     throw new Error(`高德返回错误：${data.info || data.infocode || "unknown"}`);
   }
@@ -88,8 +96,13 @@ export class AmapClient {
   constructor(
     private readonly key: string,
     private readonly jsKey = key,
-    private readonly securityJsCode?: string
+    private readonly securityJsCode?: string,
+    private readonly options: AmapClientOptions = {}
   ) {}
+
+  private fetchJson<T>(url: URL, retries = 2): Promise<T> {
+    return fetchJson<T>(url, retries, this.options);
+  }
 
   async loadJsApi(callback: string) {
     const url = new URL(AMAP_JS_BASE);
@@ -97,6 +110,7 @@ export class AmapClient {
     url.searchParams.set("key", this.jsKey);
     url.searchParams.set("plugin", "AMap.Scale,AMap.ToolBar");
     url.searchParams.set("callback", callback);
+    claimExternalRequest(this.options.requestBudget);
     const response = await fetch(url);
     if (!response.ok) {
       throw new Error(`高德地图脚本加载失败：HTTP ${response.status}`);
@@ -116,7 +130,7 @@ export class AmapClient {
     url.searchParams.set("offset", "8");
     url.searchParams.set("page", "1");
     url.searchParams.set("extensions", "base");
-    const data = await fetchJson<{ pois?: AmapPoi[] }>(url);
+    const data = await this.fetchJson<{ pois?: AmapPoi[] }>(url);
     return (data.pois || [])
       .map((poi, index) => {
         const location = toLocation(poi.location);
@@ -141,7 +155,7 @@ export class AmapClient {
     url.searchParams.set("extensions", "base");
     if (options.keywords) url.searchParams.set("keywords", options.keywords);
     if (options.types) url.searchParams.set("types", options.types);
-    const data = await fetchJson<{ pois?: AmapPoi[] }>(url);
+    const data = await this.fetchJson<{ pois?: AmapPoi[] }>(url);
     return (data.pois || [])
       .map((poi, index) => {
         const location = toLocation(poi.location);
@@ -161,7 +175,7 @@ export class AmapClient {
     url.searchParams.set("key", this.key);
     url.searchParams.set("address", address);
     url.searchParams.set("city", city);
-    const data = await fetchJson<{ geocodes?: Array<{ formatted_address?: string; location?: string }> }>(url);
+    const data = await this.fetchJson<{ geocodes?: Array<{ formatted_address?: string; location?: string }> }>(url);
     return (data.geocodes || [])
       .map((geo, index) => {
         const location = toLocation(geo.location);
@@ -195,7 +209,7 @@ export class AmapClient {
       url.searchParams.set("type", "1");
       url.searchParams.set("destination", `${destination.lng},${destination.lat}`);
       url.searchParams.set("origins", origins.map((point) => `${point.lng},${point.lat}`).join("|"));
-      const data = await fetchJson<{ results?: AmapDistanceResult[] }>(url);
+      const data = await this.fetchJson<{ results?: AmapDistanceResult[] }>(url);
 
       for (const item of data.results || []) {
         const originIndex = Math.max(0, Number(item.origin_id || 1) - 1);
@@ -221,7 +235,7 @@ export class AmapClient {
     url.searchParams.set("type", "1");
     url.searchParams.set("origins", `${origin.lng},${origin.lat}`);
     url.searchParams.set("destination", `${destination.lng},${destination.lat}`);
-    const data = await fetchJson<{ results?: AmapDistanceResult[] }>(url);
+    const data = await this.fetchJson<{ results?: AmapDistanceResult[] }>(url);
     const item = data.results?.[0];
     if (!item) throw new Error("高德没有返回可用驾车距离");
     return {
@@ -240,7 +254,7 @@ export class AmapClient {
     if (waypoints.length) {
       url.searchParams.set("waypoints", waypoints.map((point) => `${point.lng},${point.lat}`).join(";"));
     }
-    const data = await fetchJson<{
+    const data = await this.fetchJson<{
       route?: {
         paths?: Array<{
           duration?: string;
@@ -273,7 +287,7 @@ export class AmapClient {
     url.searchParams.set("keywords", keyword);
     url.searchParams.set("subdistrict", "0");
     url.searchParams.set("extensions", "base");
-    const data = await fetchJson<{ districts?: Array<{ name?: string; citycode?: string }> }>(url);
+    const data = await this.fetchJson<{ districts?: Array<{ name?: string; citycode?: string }> }>(url);
     return (data.districts || [])
       .map((d) => d.name)
       .filter(Boolean) as string[];
@@ -288,7 +302,7 @@ export class AmapClient {
     url.searchParams.set("strategy", "0");
     url.searchParams.set("extensions", "base");
 
-    const data = await fetchJson<{
+    const data = await this.fetchJson<{
       route?: {
         transits?: Array<{
           duration?: string;

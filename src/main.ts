@@ -55,6 +55,22 @@ let focusPersonId = "";
 let focusStopId = "";
 let chatTickTimer: number | null = null;
 let lastPlanMode: "manual" | "smart" = "manual";
+let chatBusy = false;
+const REQUEST_OVERLOAD_MESSAGE =
+  "请求过量了，高德或模型接口暂时没有返回可用结果。请等几十秒后再试，或者减少一次规划里的集合点/成员数量。";
+
+function friendlyErrorMessage(error: unknown, fallback = "请求处理失败，请稍后再试。") {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (
+    !message ||
+    /REQUEST_OVERLOAD|CUQPS|QPS|rate.?limit|too many|429|subrequest|高德请求失败|高德返回错误|DeepSeek 请求失败|fetch failed|network|timeout|HTTP 5\d\d/i.test(
+      message
+    )
+  ) {
+    return REQUEST_OVERLOAD_MESSAGE;
+  }
+  return message || fallback;
+}
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("App root not found");
@@ -298,7 +314,7 @@ function updateChrome() {
   } else {
     mapStatus.textContent = `${confirmedPeople + confirmedDestination}/${state.people.length + 1} 坐标确认`;
   }
-  const chatReady = state.hasGeneratedRoute === true || state.loading === true;
+  const chatReady = state.hasGeneratedRoute === true || state.loading === true || chatBusy;
   chatDisabledOverlay.classList.toggle("visible", !chatReady);
   chatForm.classList.toggle("disabled", !chatReady);
   chatInput.disabled = !chatReady;
@@ -459,6 +475,40 @@ function personIdByName(name?: string) {
   return state.people.find((person) => person.name === name)?.id || "";
 }
 
+function personPatchKey(item: { id?: string; name?: string }) {
+  return item.id || item.name || "";
+}
+
+function applyPersonPatch(item: NonNullable<ManifestPatch["people"]>[number], existing?: (typeof state.people)[number]) {
+  const suggestion = suggestionFromPatch({ name: item.name || existing?.name || "", address: item.address, lng: item.lng, lat: item.lat });
+  return createPerson({
+    id: existing?.id || item.id || localId("person"),
+    name: item.name || existing?.name || "",
+    addressInput: item.address || suggestion?.name || existing?.addressInput || "",
+    selectedAddress: suggestion || existing?.selectedAddress || null,
+    hasCar: item.hasCar ?? existing?.hasCar ?? false,
+    note: item.note ?? existing?.note ?? "",
+    assignedDriverId: item.assignedDriverId || driverIdByName(item.assignedDriverName) || existing?.assignedDriverId || ""
+  });
+}
+
+function applyMeetingPatch(item: NonNullable<ManifestPatch["meetingPoints"]>[number], existing?: (typeof state.meetingPoints)[number]) {
+  const suggestion = suggestionFromPatch({ name: item.name || existing?.name || "", address: item.address, lng: item.lng, lat: item.lat });
+  const memberIds = item.memberIds || item.memberNames?.map(personIdByName).filter(Boolean) || existing?.memberIds || [];
+  return createMeetingPoint({
+    id: existing?.id || item.id || localId("meeting"),
+    name: item.name || existing?.name || "集合点",
+    addressInput: item.address || suggestion?.name || existing?.addressInput || "",
+    selectedAddress: suggestion || existing?.selectedAddress || null,
+    memberIds,
+    assignedDriverId: item.assignedDriverId || driverIdByName(item.assignedDriverName) || existing?.assignedDriverId || ""
+  });
+}
+
+function isRouteChangeRequest(message: string) {
+  return /(修改|调整|改成|改一下|重新安排|重排|换成|改为|分配|安排|让|移到|加入|去.*集合|减少时间|更快|优化|重新规划|生成方案|生成规划)/.test(message);
+}
+
 function flashManifestUpdate() {
   inputPanel.classList.add("ai-updated");
   window.setTimeout(() => inputPanel.classList.remove("ai-updated"), 1600);
@@ -497,39 +547,35 @@ function applyManifestPatch(patch: ManifestPatch, options: { routeSyncPending?: 
   }
 
   if (patch.people?.length) {
-    state.people = patch.people.map((item) => {
-      const existing = state.people.find((person) => person.id === item.id) || state.people.find((person) => person.name && person.name === item.name);
-      const suggestion = suggestionFromPatch({ name: item.name, address: item.address, lng: item.lng, lat: item.lat });
-      return createPerson({
-        id: existing?.id || item.id || localId("person"),
-        name: item.name || existing?.name || "",
-        addressInput: item.address || suggestion?.name || existing?.addressInput || "",
-        selectedAddress: suggestion || existing?.selectedAddress || null,
-        hasCar: item.hasCar ?? existing?.hasCar ?? false,
-        note: item.note ?? existing?.note ?? "",
-        assignedDriverId: item.assignedDriverId || driverIdByName(item.assignedDriverName) || existing?.assignedDriverId || ""
-      });
-    });
+    const patchKeys = new Set(patch.people.map(personPatchKey).filter(Boolean));
+    state.people = [
+      ...state.people.map((person) => {
+        const item = patch.people!.find((candidate) => candidate.id === person.id || (candidate.name && candidate.name === person.name));
+        return item ? applyPersonPatch(item, person) : person;
+      }),
+      ...patch.people
+        .filter((item) => {
+          const key = personPatchKey(item);
+          return key && !state.people.some((person) => person.id === item.id || person.name === item.name) && patchKeys.has(key);
+        })
+        .map((item) => applyPersonPatch(item))
+    ];
   }
 
-  if (patch.clearMeetingPoints) {
-    state.meetingPoints = [];
-  }
+  const baseMeetingPoints = patch.clearMeetingPoints ? [] : state.meetingPoints;
 
   if (patch.meetingPoints) {
-    state.meetingPoints = patch.meetingPoints.map((item) => {
-      const existing = state.meetingPoints.find((meeting) => meeting.id === item.id) || state.meetingPoints.find((meeting) => meeting.name === item.name);
-      const suggestion = suggestionFromPatch({ name: item.name, address: item.address, lng: item.lng, lat: item.lat });
-      const memberIds = item.memberIds || item.memberNames?.map(personIdByName).filter(Boolean) || existing?.memberIds || [];
-      return createMeetingPoint({
-        id: existing?.id || item.id || localId("meeting"),
-        name: item.name || existing?.name || "集合点",
-        addressInput: item.address || suggestion?.name || existing?.addressInput || "",
-        selectedAddress: suggestion || existing?.selectedAddress || null,
-        memberIds,
-        assignedDriverId: item.assignedDriverId || driverIdByName(item.assignedDriverName) || existing?.assignedDriverId || ""
-      });
-    });
+    state.meetingPoints = [
+      ...baseMeetingPoints.map((meeting) => {
+        const item = patch.meetingPoints!.find((candidate) => candidate.id === meeting.id || candidate.name === meeting.name);
+        return item ? applyMeetingPatch(item, meeting) : meeting;
+      }),
+      ...patch.meetingPoints
+        .filter((item) => !baseMeetingPoints.some((meeting) => meeting.id === item.id || meeting.name === item.name))
+        .map((item) => applyMeetingPatch(item))
+    ];
+  } else if (patch.clearMeetingPoints) {
+    state.meetingPoints = [];
   }
 
   state.routeResult = null;
@@ -802,7 +848,7 @@ async function syncRouteFromManifest(mode: "manual" | "smart", options: { showLo
     patchState({
       loading: false,
       routeResult: null,
-      error: error instanceof Error ? error.message : "路线规划失败"
+      error: friendlyErrorMessage(error, "路线规划失败")
     });
     return false;
   }
@@ -829,9 +875,12 @@ function parseSseChunk(buffer: string, onEvent: (event: string, data: any) => vo
 
 async function sendChatMessage(message: string) {
   agentSteps = [];
+  chatBusy = true;
+  updateChrome();
   let manifestChanged = false;
   let routeFreshAfterManifest = false;
   let timeConstraintChanged = false;
+  const routeChangeRequest = isRouteChangeRequest(message);
   const hadRouteBeforeTimeConstraint = Boolean(state.routeResult);
   const extractedTimeConstraint = extractTimeConstraint(message);
   if (extractedTimeConstraint) {
@@ -906,7 +955,8 @@ async function sendChatMessage(message: string) {
         routeFreshAfterManifest = true;
         updateAssistantProgress(assistantMessage, "已生成路线，正在整理回答");
         state.routeResult = normalizeRouteResponse(data.routeResult as RoutePlanResponse);
-        state.hasGeneratedRoute = true;        lastPlanMode = state.routeResult.source === "smart" ? "smart" : "manual";
+        state.hasGeneratedRoute = true;
+        lastPlanMode = state.routeResult.source === "smart" ? "smart" : "manual";
         state.loading = false;
         state.error = null;
         persistAndPaint();
@@ -926,9 +976,12 @@ async function sendChatMessage(message: string) {
       }
       if (event === "error") {
         assistantMessage.streaming = false;
-        assistantMessage.status = "处理失败";
+        assistantMessage.status = "请求过量";
         assistantMessage.elapsedSec = assistantMessage.startedAt ? Math.max(0, Math.floor((Date.now() - assistantMessage.startedAt) / 1000)) : assistantMessage.elapsedSec;
-        assistantMessage.content += `\n${data.error || "对话失败"}`;
+        assistantMessage.content = `${assistantMessage.content.trim() ? `${assistantMessage.content.trim()}\n` : ""}${friendlyErrorMessage(
+          data.error || "对话失败",
+          "对话失败"
+        )}`;
         assistantMessage.source = "fallback";
         stopChatTicker();
         renderChat();
@@ -961,6 +1014,13 @@ async function sendChatMessage(message: string) {
       stopChatTicker();
       updateAssistantProgress(assistantMessage, synced ? "右侧时间已换算" : "右侧时间需要补全信息后再生成");
     }
+    if (routeChangeRequest && !manifestChanged && !routeFreshAfterManifest && !timeConstraintChanged) {
+      updateAssistantProgress(assistantMessage, "未收到可应用的清单修改");
+      if (!assistantMessage.content.includes("左侧清单")) {
+        assistantMessage.content += `${assistantMessage.content.trim() ? "\n" : ""}这次没有收到可应用到左侧清单的修改，所以右侧路线没有变化。请明确说“让A去B那里集合”“把某点分配给某司机”或“重新AI优化”。`;
+      }
+      renderChat();
+    }
     if (!assistantMessage.content.trim()) {
       assistantMessage.content = assistantMessage.status === "处理完成" ? "处理完成，路线结果已更新到右侧。" : "没有收到可用回复。";
       if (assistantMessage.status !== "处理完成") assistantMessage.source = "fallback";
@@ -968,18 +1028,20 @@ async function sendChatMessage(message: string) {
     }
   } catch (error) {
     assistantMessage.streaming = false;
-    assistantMessage.status = "处理失败";
+    assistantMessage.status = "请求过量";
     assistantMessage.elapsedSec = assistantMessage.startedAt ? Math.max(0, Math.floor((Date.now() - assistantMessage.startedAt) / 1000)) : assistantMessage.elapsedSec;
-    assistantMessage.content = error instanceof Error ? error.message : "对话失败";
+    assistantMessage.content = friendlyErrorMessage(error, "对话失败");
     assistantMessage.source = "fallback";
   } finally {
     assistantMessage.streaming = false;
     assistantMessage.elapsedSec = assistantMessage.startedAt ? Math.max(0, Math.floor((Date.now() - assistantMessage.startedAt) / 1000)) : assistantMessage.elapsedSec;
     stopChatTicker();
+    chatBusy = false;
     chatInput.disabled = false;
     chatSendButton.disabled = false;
     planButton.disabled = false;
     smartPlanButton.disabled = false;
+    updateChrome();
     renderChat();
   }
 }

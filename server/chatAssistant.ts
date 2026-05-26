@@ -1,3 +1,5 @@
+import { REQUEST_OVERLOAD_MESSAGE } from "./requestBudget";
+
 type ModelConfig = {
   apiKey?: string;
   baseUrl?: string;
@@ -142,7 +144,7 @@ export async function replyToRouteChat(input: ChatInput, config: ModelConfig) {
     } catch (error) {
       return {
         source: "fallback" as const,
-        reply: `${fallbackReply(input)}\n\n模型接口暂时不可用：${error instanceof Error ? error.message : "未知错误"}`
+        reply: `${fallbackReply(input)}\n\n${REQUEST_OVERLOAD_MESSAGE}`
       };
     }
   }
