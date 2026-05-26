@@ -23,6 +23,18 @@ let mapViewInstance: ReturnType<typeof createAMapView> | null = null;
 // 全局需求对话框实例
 let requirementDialogInstance: ReturnType<typeof createRequirementDialog> | null = null;
 
+async function readApiJson(response: Response) {
+  const text = await response.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    const message = text.includes("The page could not be found")
+      ? "线上 API 路由还没有部署完成，请稍后刷新页面再试。"
+      : text.trim() || `请求失败：HTTP ${response.status}`;
+    throw new Error(message);
+  }
+}
+
 // 解析SSE chunk
 function parseSseChunk(buffer: string, onEvent: (event: string, data: any) => void): string {
   const parts = buffer.split("\n\n");
@@ -449,7 +461,7 @@ function createResultView() {
         body: JSON.stringify(payload)
       });
 
-      const data = await response.json();
+      const data = await readApiJson(response);
       if (!response.ok) throw new Error(data.error || "路线规划失败");
 
       state.routeResult = data;
