@@ -116,6 +116,7 @@ export function createPeopleCountStep(config: { initialValue: number; onSelect: 
 
   wheel.addEventListener("touchmove", (e) => {
     if (!isDragging) return;
+    e.preventDefault(); // 阻止浏览器默认行为（包括下拉刷新）
 
     const y = e.touches[0].clientY;
     const deltaY = y - lastY;
@@ -133,7 +134,7 @@ export function createPeopleCountStep(config: { initialValue: number; onSelect: 
     const newOffset = basePosition + offset;
 
     wheel.style.transform = `translateY(${newOffset}px)`;
-  }, { passive: true });
+  }, { passive: false });
 
   wheel.addEventListener("touchend", () => {
     if (!isDragging) return;

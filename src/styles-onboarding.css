@@ -283,6 +283,7 @@
   align-items: center;
   justify-content: center;
   padding-top: 40px;
+  overscroll-behavior: contain;
 }
 
 .picker-container {
@@ -292,6 +293,8 @@
   overflow: hidden;
   border-radius: 16px;
   background: oklch(95% 0.008 238);
+  overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 
 .picker-highlight {
